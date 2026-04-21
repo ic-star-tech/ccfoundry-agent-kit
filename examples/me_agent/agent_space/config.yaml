@@ -1,0 +1,94 @@
+config_version: "1.0"
+model: ccfoundry-local
+temperature: 0.3
+max_tokens: 400
+prompt_file: /app/agent_space/SOUL.md
+notes_file: /app/agent_space/notes.md
+journal_file: /app/agent_space/journal.md
+task_file: /app/agent_space/task.md
+mcp_file: /app/agent_space/mcp_servers.yaml
+workspace_dir: /app/workspace
+capabilities:
+  - chat
+  - notes
+  - inline
+  - self_hosted
+loaded_skills:
+  - memory
+  - summary
+slash_commands:
+  - cmd: /memory
+    label: Memory
+    desc: Save or review durable memory notes.
+    skill_ref: memory
+  - cmd: /summary
+    label: Summary
+    desc: Summarize the current discussion or plan.
+    skill_ref: summary
+manifest:
+  llm:
+    needs_gateway: true
+  dashboard:
+    soul_visible: true
+    soul_editable: true
+    model_editable: true
+    config_editable: true
+    reflection_visible: true
+    vault_visible: true
+  infra:
+    heartbeat_managed: true
+    reflection_managed: true
+  mcp:
+    accepts_foundry_mcp: true
+    has_own_mcp: false
+reflection:
+  enabled: true
+  trigger: per_command
+  auto_update_threshold: 0.85
+  daily_cron: "0 23 * * *"
+  micro_model: ccfoundry-local
+  daily_model: ccfoundry-local
+  update_target: notes_only
+service_fee:
+  base: 0.0
+  per_action: 0.05
+  max_per_call: 1.0
+foundry:
+  enabled: false
+  base_url: http://127.0.0.1:9090
+  public_base_url: http://127.0.0.1:8085
+  bootstrap_delivery: push
+  discovery_claim_token: ""
+  developer_identity: {}
+  network_zone: EXTERNAL
+  heartbeat_interval_seconds: 30
+  tags:
+    - me_agent
+    - personal
+    - self_hosted
+  requirements:
+    preferred_role: personal_assistant
+    execution_contract:
+      execution_mode: remote_brain_foundry_workspace
+      agent_space_location: external
+      workspace_location: foundry_sandbox
+      skill_delivery_mode: descriptor_only
+      data_retention_policy: no_raw_copy_by_default
+      network_egress_policy: no_lan_scoped_egress
+      allowed_export_policy: summary_only
+  resource_requests:
+    llm_access: true
+    sandbox_workspace:
+      requested: true
+      workspace_profile: green
+      agent_space_mount: none
+      delivery_mode: ephemeral_task_workspace
+  budget:
+    max_cost_per_call_usd: 0.02
+  governance:
+    review_hint: user_agent_default
+  workspace_features:
+    - chat
+  interaction_modes:
+    - chat
+  terminal_provider: none

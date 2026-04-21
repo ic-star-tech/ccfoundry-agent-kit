@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatRequest",
+  "type": "object",
+  "required": ["message", "mode", "username", "context", "conversation_id", "metadata"],
+  "properties": {
+    "message": { "type": "string" },
+    "mode": { "type": "string", "enum": ["direct", "inline"] },
+    "username": { "type": "string" },
+    "context": { "type": "string" },
+    "conversation_id": { "type": "string" },
+    "metadata": { "type": "object" }
+  }
+}

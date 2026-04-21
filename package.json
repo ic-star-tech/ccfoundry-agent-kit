@@ -1,0 +1,61 @@
+{
+  "name": "ccfoundry",
+  "version": "0.1.0",
+  "description": "CLI for CCFoundry Agent Kit and Agent Dev Board",
+  "license": "MIT",
+  "homepage": "https://github.com/ic-star-tech/ccfoundry-agent-kit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ic-star-tech/ccfoundry-agent-kit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ic-star-tech/ccfoundry-agent-kit/issues"
+  },
+  "keywords": [
+    "agent",
+    "a2a",
+    "mcp",
+    "foundry",
+    "dev-board",
+    "openai"
+  ],
+  "bin": {
+    "ccfoundry": "scripts/dev-board.mjs"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "scripts/dev-board.mjs",
+    "packages/python-sdk/pyproject.toml",
+    "packages/python-sdk/README.md",
+    "packages/python-sdk/src/ccfoundry_agent_kit/",
+    "examples/me_agent/.env.example",
+    "examples/me_agent/README.md",
+    "examples/me_agent/pyproject.toml",
+    "examples/me_agent/agent_space/",
+    "examples/me_agent/src/me_agent_example/",
+    "apps/agent-dev-board-api/agents.yaml",
+    "apps/agent-dev-board-api/pyproject.toml",
+    "apps/agent-dev-board-api/README.md",
+    "apps/agent-dev-board-api/src/agent_dev_board_api/",
+    "apps/agent-dev-board-web/index.html",
+    "apps/agent-dev-board-web/package.json",
+    "apps/agent-dev-board-web/package-lock.json",
+    "apps/agent-dev-board-web/tsconfig.json",
+    "apps/agent-dev-board-web/vite.config.ts",
+    "apps/agent-dev-board-web/public/brand/",
+    "apps/agent-dev-board-web/src/",
+    "docs/assets/readme-agent-dev-board-banner.svg"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev-board": "node scripts/dev-board.mjs",
+    "dev-board:lan": "node scripts/dev-board.mjs --host 0.0.0.0",
+    "pack:dry-run": "npm pack --dry-run"
+  }
+}

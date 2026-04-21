@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatResponse",
+  "type": "object",
+  "required": ["reply", "notes_update", "metadata"],
+  "properties": {
+    "reply": { "type": "string" },
+    "notes_update": { "type": "string" },
+    "metadata": { "type": "object" }
+  }
+}

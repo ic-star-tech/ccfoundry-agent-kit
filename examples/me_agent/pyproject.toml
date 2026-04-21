@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ccfoundry-me-agent-example"
+version = "0.1.0"
+description = "Self-hosted me_agent-style example for CCFoundry Agent Kit"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "ccfoundry-agent-kit",
+  "openai>=1.42,<2.0",
+  "python-dotenv>=1.0,<2.0",
+  "pyyaml>=6.0,<7.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

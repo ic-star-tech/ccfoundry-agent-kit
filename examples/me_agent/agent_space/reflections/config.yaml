@@ -1,0 +1,11 @@
+enabled: true
+trigger: per_command
+micro_model: ccfoundry-local
+daily_model: ccfoundry-local
+daily_cron: "0 23 * * *"
+auto_update_threshold: 0.85
+max_soul_append_lines: 10
+dedup_enabled: true
+dedup_similarity: 0.6
+micro_prompt: micro_reflect.txt
+daily_prompt: daily_review.txt

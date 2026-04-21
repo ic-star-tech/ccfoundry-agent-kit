@@ -1,0 +1,8 @@
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/node_modules/
+**/dist/
+**/.venv/
+**/.dev-board/
+examples/me_agent/workspace/

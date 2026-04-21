@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentManifest",
+  "type": "object",
+  "required": ["name", "label", "version", "capabilities", "default_mode", "metadata"],
+  "properties": {
+    "name": { "type": "string" },
+    "label": { "type": "string" },
+    "version": { "type": "string" },
+    "description": { "type": "string" },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "default_mode": {
+      "type": "string",
+      "enum": ["direct", "inline"]
+    },
+    "metadata": {
+      "type": "object"
+    }
+  }
+}
