@@ -2,6 +2,7 @@
   "name": "ccfoundry",
   "version": "0.1.0",
   "description": "CLI for CCFoundry Agent Kit and Agent Dev Board",
+  "type": "module",
   "license": "MIT",
   "homepage": "https://github.com/ic-star-tech/ccfoundry-agent-kit#readme",
   "repository": {

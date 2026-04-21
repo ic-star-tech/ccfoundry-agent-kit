@@ -33,7 +33,7 @@ An open-source framework for building agents that learn, evolve, and collaborate
 | [**MCP**](https://modelcontextprotocol.io) | Manifest-level MCP declarations and config hooks; runtime MCP transport is not built into the SDK yet |
 | **OpenAI Chat Completions** | Universal model interface — any compatible provider works |
 
-See [Standards](docs/standards.md) for details.
+See [Standards](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/standards.md) for details.
 
 ## What You Get
 
@@ -41,7 +41,9 @@ See [Standards](docs/standards.md) for details.
 - **`examples/me_agent`** — Self-hosted personal agent with durable `agent_space/`, skills, reflections, and safe fallback mode
 - **`apps/agent-dev-board-api`** + **`apps/agent-dev-board-web`** — Browser-based Agent Dev Board for local testing and Foundry onboarding
 
-## Quickstart
+## Install (Recommended)
+
+Runtime: Python `3.10+` and Node.js `18+`. Node.js `20` is recommended.
 
 ```bash
 mkdir my-agent-dev-board
@@ -51,6 +53,8 @@ ccfoundry
 ```
 
 The global CLI writes `.venv/` and `.dev-board/` into your current working directory, then starts the Dev Board on a local web port, usually `http://127.0.0.1:3000`. The explicit subcommand form is also supported: `ccfoundry dev-board`.
+
+## Run From Source
 
 For repo-local development instead:
 
@@ -62,7 +66,7 @@ npm run dev-board
 
 That keeps the runtime state inside the repository checkout.
 
-See [Quickstart](docs/quickstart.md) for manual setup and LAN testing.
+See [Quickstart](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/quickstart.md) for manual setup and LAN testing.
 
 ## Design Principles
 
@@ -72,19 +76,19 @@ See [Quickstart](docs/quickstart.md) for manual setup and LAN testing.
 - **Self-hostable** — Runs on your machine with local Python and Node.js only
 - **Evolvable** — Skills and knowledge improve through use, not just code changes
 
-See [Philosophy](docs/philosophy.md) for the deeper rationale.
+See [Philosophy](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/philosophy.md) for the deeper rationale.
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md) — Setup and first run
-- [Philosophy](docs/philosophy.md) — Design rationale
-- [Standards](docs/standards.md) — A2A, SSE, OpenAI-compatible model calls, and the current MCP boundary
-- [Architecture](docs/architecture.md) — Component layers and request flow
-- [SDK Guide](docs/sdk.md) — Building blocks and API reference
-- [Foundry Onboarding](docs/foundry-onboarding.md) — Discovery, invite, and approval flow
-- [Protocol (Wire Format)](docs/protocol.md) — HTTP contract and SSE events
-- [Non-Goals](docs/non-goals.md) — What this repo intentionally excludes
-- [Agent Dev Board](docs/agent-dev-board.md) — Local dev UI guide
+- [Quickstart](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/quickstart.md) — Setup and first run
+- [Philosophy](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/philosophy.md) — Design rationale
+- [Standards](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/standards.md) — A2A, SSE, OpenAI-compatible model calls, and the current MCP boundary
+- [Architecture](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/architecture.md) — Component layers and request flow
+- [SDK Guide](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/sdk.md) — Building blocks and API reference
+- [Foundry Onboarding](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/foundry-onboarding.md) — Discovery, invite, and approval flow
+- [Protocol (Wire Format)](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/protocol.md) — HTTP contract and SSE events
+- [Non-Goals](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/non-goals.md) — What this repo intentionally excludes
+- [Agent Dev Board](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/agent-dev-board.md) — Local dev UI guide
 
 ## License
 

@@ -2,7 +2,9 @@
 
 This guide brings up the local `Agent Dev Board`, then creates and runs a template-based local agent inside the board.
 
-## Fastest global startup
+## Install (Recommended)
+
+Runtime: Python `3.10+` and Node.js `18+`. Node.js `20` is recommended.
 
 From any empty working directory:
 
@@ -30,7 +32,7 @@ ccfoundry dev-board --host 0.0.0.0
 
 `ccfoundry` by itself defaults to `ccfoundry dev-board`, and `ccfoundry agent-dev-board` is accepted as a longer alias.
 
-## Fastest repo-local startup
+## Run From Source
 
 From the repository root:
 
