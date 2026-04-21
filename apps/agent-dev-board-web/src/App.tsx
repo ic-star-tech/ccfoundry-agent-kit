@@ -247,6 +247,13 @@ async function readErrorMessage(response: Response): Promise<string> {
   }
 }
 
+function expectArray<T>(value: unknown, label: string): T[] {
+  if (Array.isArray(value)) {
+    return value as T[];
+  }
+  throw new Error(`${label} returned an unexpected response shape.`);
+}
+
 function statusTone(status: string): "neutral" | "success" | "warn" {
   const normalized = status.trim().toUpperCase();
   if (["APPROVED", "REGISTERED", "REDEEMED", "MATCHED", "ONLINE", "TRUE", "ACTIVE"].includes(normalized)) {
@@ -702,9 +709,9 @@ export default function App() {
         throw new Error(await readErrorMessage(agentsResponse));
       }
 
-      const templatesPayload = (await templatesResponse.json()) as LocalAgentTemplate[];
-      const localAgentsPayload = (await localAgentsResponse.json()) as LocalAgentRuntime[];
-      const agentsPayload = (await agentsResponse.json()) as AgentEntry[];
+      const templatesPayload = expectArray<LocalAgentTemplate>(await templatesResponse.json(), "Local agent templates");
+      const localAgentsPayload = expectArray<LocalAgentRuntime>(await localAgentsResponse.json(), "Local agents");
+      const agentsPayload = expectArray<AgentEntry>(await agentsResponse.json(), "Agent inventory");
 
       setLocalTemplates(templatesPayload);
       setLocalAgents(localAgentsPayload);

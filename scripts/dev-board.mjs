@@ -223,6 +223,22 @@ function touch(target, payload) {
   writeFileSync(target, payload, "utf-8");
 }
 
+async function waitForHttp(url, timeoutMs = 30000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        return;
+      }
+    } catch {
+      // Service is still starting.
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+  }
+  throw new Error(`Timed out waiting for ${url}`);
+}
+
 function ensurePythonDeps() {
   const watched = [
     join(packageRoot, "packages", "python-sdk", "pyproject.toml"),
@@ -412,6 +428,16 @@ async function main() {
       },
     ),
   );
+
+  try {
+    await Promise.all([
+      waitForHttp(`http://${host}:${apiPort}/api/agents`),
+      waitForHttp(`http://${host}:${webPort}/`),
+    ]);
+    log(`Ready. Open http://${host}:${webPort}/`);
+  } catch (error) {
+    fail(String(error && error.message ? error.message : error));
+  }
 }
 
 main().catch((error) => {
