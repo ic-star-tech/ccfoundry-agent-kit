@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import pty
 import fcntl
@@ -21,6 +22,7 @@ from .pull_runtime import FoundryPullRuntime
 from .workspace_api import build_workspace_router
 
 ChatHandler = Callable[[ChatRequest, AgentSpace], ChatResponse | Awaitable[ChatResponse]]
+logger = logging.getLogger(__name__)
 
 
 def _sse_event(event_type: str, data: dict[str, Any]) -> str:
@@ -165,7 +167,8 @@ def create_agent_app(
                         yield _sse_event("token", {"content": chunk})
                 yield _sse_event("message", result.message_payload())
             except Exception as exc:
-                yield _sse_event("error", {"detail": str(exc)})
+                logger.exception("Foundry chat stream failed", exc_info=exc)
+                yield _sse_event("error", {"detail": "Request failed"})
             finally:
                 yield _sse_event("done", {})
 
@@ -303,13 +306,14 @@ def create_agent_app(
         try:
             foundry_bootstrap.verify_callback_token(x_foundry_bootstrap_token)
         except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            raise HTTPException(status_code=403, detail="Invalid Foundry bootstrap token") from exc
         try:
             return await foundry_bootstrap.handle_invite(payload)
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=409, detail="Invite payload was rejected") from exc
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            logger.exception("Foundry invite handling failed", exc_info=exc)
+            raise HTTPException(status_code=502, detail="Failed to process Foundry invite") from exc
 
     @app.post("/foundry/bootstrap/approved")
     async def receive_foundry_approval(
@@ -321,11 +325,12 @@ def create_agent_app(
         try:
             foundry_bootstrap.verify_callback_token(x_foundry_bootstrap_token)
         except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            raise HTTPException(status_code=403, detail="Invalid Foundry bootstrap token") from exc
         try:
             return await foundry_bootstrap.handle_approval(payload)
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            logger.exception("Foundry approval handling failed", exc_info=exc)
+            raise HTTPException(status_code=502, detail="Failed to process Foundry approval") from exc
 
     @app.post("/foundry/bootstrap/developer-claim")
     async def install_developer_claim(
@@ -340,9 +345,10 @@ def create_agent_app(
         try:
             return await foundry_bootstrap.install_developer_claim(payload)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail="Developer claim payload is invalid") from exc
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            logger.exception("Developer claim install failed", exc_info=exc)
+            raise HTTPException(status_code=502, detail="Failed to install developer claim") from exc
 
     if foundry_bootstrap:
         @app.on_event("startup")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import secrets
 import sys
@@ -13,6 +14,8 @@ import httpx
 from pydantic import BaseModel, Field
 
 from .models import AgentManifest
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow_iso() -> str:
@@ -425,7 +428,8 @@ class FoundryBootstrap:
             if isinstance(payload, dict):
                 await self._apply_bootstrap_actions(payload)
         except Exception as exc:
-            self.state.last_error = f"bootstrap_poll_failed: {exc}"
+            logger.warning("Bootstrap action polling failed", exc_info=exc)
+            self.state.last_error = "bootstrap_poll_failed"
             self._save_state()
 
     async def _announce_or_heartbeat(self) -> None:
@@ -482,7 +486,8 @@ class FoundryBootstrap:
             if self.config.bootstrap_delivery in {"poll", "hybrid"}:
                 await self._poll_bootstrap_actions()
         except Exception as exc:
-            self.state.last_error = f"bootstrap_discovery_failed: {exc}"
+            logger.warning("Bootstrap announce/heartbeat failed", exc_info=exc)
+            self.state.last_error = "bootstrap_discovery_failed"
             self._save_state()
 
     def public_state(self) -> dict[str, Any]:
@@ -658,8 +663,9 @@ class FoundryBootstrap:
                         self.state.last_error = None
                         self._save_state()
                 except Exception as exc:
+                    logger.warning("Fetching approved agent env config failed", exc_info=exc)
                     async with self._lock:
-                        self.state.last_error = f"bootstrap_fetch_config_failed: {exc}"
+                        self.state.last_error = "bootstrap_fetch_config_failed"
                         self._save_state()
             return {
                 "ok": True,
@@ -668,8 +674,9 @@ class FoundryBootstrap:
                 "agent_name": invite.expected_name,
             }
         except Exception as exc:
+            logger.warning("Registering bootstrap invite failed", exc_info=exc)
             async with self._lock:
-                self.state.last_error = f"bootstrap_register_failed: {exc}"
+                self.state.last_error = "bootstrap_register_failed"
                 self._save_state()
             raise
 

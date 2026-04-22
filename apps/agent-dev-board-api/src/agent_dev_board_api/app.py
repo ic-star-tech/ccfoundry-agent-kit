@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -25,6 +26,7 @@ AGENTS_FILE = Path(os.getenv("CCFOUNDRY_AGENTS_FILE", str(APP_DIR / "agents.yaml
 RUNTIME_DIR = AGENTS_FILE.parent
 VENV_PYTHON = Path(os.getenv("CCFOUNDRY_DEV_VENV_PYTHON", str(REPO_ROOT / ".venv" / "bin" / "python"))).expanduser()
 TRANSCRIPTS: dict[str, list[dict[str, str]]] = {}
+logger = logging.getLogger(__name__)
 
 
 class LiteAgentConfig(BaseModel):
@@ -293,10 +295,11 @@ async def _github_identity(token: str) -> dict[str, Any]:
             response = await client.get("https://api.github.com/user", headers=headers)
         payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
         if not response.is_success:
+            logger.warning("GitHub identity lookup failed with status %s", response.status_code)
             return {
                 "authenticated": False,
                 "status_code": response.status_code,
-                "detail": str((payload or {}).get("message") or response.text[:200]).strip(),
+                "detail": "GitHub API request failed",
             }
         if not isinstance(payload, dict):
             payload = {}
@@ -310,9 +313,10 @@ async def _github_identity(token: str) -> dict[str, Any]:
             "html_url": str(payload.get("html_url") or "").strip(),
         }
     except Exception as exc:
+        logger.warning("GitHub identity lookup failed", exc_info=exc)
         return {
             "authenticated": False,
-            "detail": str(exc),
+            "detail": "GitHub API request failed",
         }
 
 
@@ -373,7 +377,8 @@ async def _probe_json(client: httpx.AsyncClient, url: str) -> tuple[dict[str, An
     try:
         response = await client.get(url)
     except Exception as exc:
-        return None, {"ok": False, "url": url, "detail": str(exc)}
+        logger.warning("Probe request failed for %s", url, exc_info=exc)
+        return None, {"ok": False, "url": url, "detail": "request_failed"}
 
     summary: dict[str, Any] = {
         "ok": response.is_success,
@@ -383,7 +388,7 @@ async def _probe_json(client: httpx.AsyncClient, url: str) -> tuple[dict[str, An
     try:
         payload = response.json()
     except Exception:
-        payload = {"raw": response.text[:400]}
+        payload = {"non_json": True}
     return payload if isinstance(payload, dict) else {"value": payload}, summary
 
 
@@ -397,7 +402,8 @@ async def _probe_route(
     try:
         response = await client.request(method, url, json=json_body)
     except Exception as exc:
-        return {"url": url, "method": method, "ok": False, "detail": str(exc)}
+        logger.warning("Route probe failed for %s %s", method, url, exc_info=exc)
+        return {"url": url, "method": method, "ok": False, "detail": "request_failed"}
 
     return {
         "url": url,
@@ -510,9 +516,10 @@ async def create_local_agent(request: LocalAgentCreateRequest) -> LocalAgentRunt
             foundry_url=request.foundry_url,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="Local agent request is invalid") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        logger.warning("Local agent creation failed for %s", request.name, exc_info=exc)
+        raise HTTPException(status_code=409, detail="Local agent could not be created") from exc
     LOCAL_AGENT_MANAGER.ensure_runtime_files()
     return LocalAgentRuntime.model_validate(item)
 
@@ -522,7 +529,10 @@ async def start_local_agent(agent_name: str) -> LocalAgentRuntime:
     try:
         item = LOCAL_AGENT_MANAGER.start_agent(agent_name)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Agent not found") from exc
+    except RuntimeError as exc:
+        logger.warning("Local agent start failed for %s", agent_name, exc_info=exc)
+        raise HTTPException(status_code=409, detail="Local agent configuration is invalid") from exc
     LOCAL_AGENT_MANAGER.ensure_runtime_files()
     return LocalAgentRuntime.model_validate(item)
 
@@ -532,7 +542,10 @@ async def stop_local_agent(agent_name: str) -> LocalAgentRuntime:
     try:
         item = LOCAL_AGENT_MANAGER.stop_agent(agent_name)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Agent not found") from exc
+    except RuntimeError as exc:
+        logger.warning("Local agent stop failed for %s", agent_name, exc_info=exc)
+        raise HTTPException(status_code=409, detail="Local agent configuration is invalid") from exc
     LOCAL_AGENT_MANAGER.ensure_runtime_files()
     return LocalAgentRuntime.model_validate(item)
 
@@ -546,7 +559,8 @@ async def list_agents() -> list[dict[str, Any]]:
         try:
             manifest = (await AgentClient(agent.base_url).manifest()).model_dump(mode="json")
         except Exception as exc:
-            error = str(exc)
+            logger.warning("Manifest probe failed for %s", agent.base_url, exc_info=exc)
+            error = "Manifest unavailable"
         result.append(
             {
                 "name": agent.name,
@@ -707,7 +721,8 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
             try:
                 response = await client.post(url, headers=headers, json=payload)
             except Exception as exc:
-                route_attempts.append({"url": url, "ok": False, "detail": str(exc)})
+                logger.warning("Bootstrap ticket request failed for %s", url, exc_info=exc)
+                route_attempts.append({"url": url, "ok": False, "detail": "request_failed"})
                 continue
 
             entry = {
@@ -715,14 +730,13 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
                 "status_code": response.status_code,
                 "ok": response.is_success,
             }
-            detail_text = response.text[:400].strip()
-            if detail_text:
-                entry["detail"] = detail_text
+            if not response.is_success:
+                entry["detail"] = "upstream_error"
             route_attempts.append(entry)
             if response.status_code in {404, 405}:
                 continue
             if not response.is_success:
-                failure_message = detail_text or f"status={response.status_code}"
+                failure_message = f"Foundry bootstrap ticket request failed (status {response.status_code})"
                 continue
             raw_payload = response.json()
             ticket_response = raw_payload if isinstance(raw_payload, dict) else {"value": raw_payload}
@@ -762,7 +776,12 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
                 json=apply_payload,
             )
         if not response.is_success:
-            raise HTTPException(status_code=502, detail=f"Failed to apply discovery claim to agent: {response.text[:400]}")
+            logger.warning(
+                "Developer claim apply failed for %s with status %s",
+                agent.base_url,
+                response.status_code,
+            )
+            raise HTTPException(status_code=502, detail="Failed to apply discovery claim to agent")
         raw_apply = response.json()
         apply_result = raw_apply if isinstance(raw_apply, dict) else {"value": raw_apply}
 
@@ -893,7 +912,8 @@ async def chat(request: LiteChatRequest) -> StreamingResponse:
                 )
             yield _sse_event("done", {})
         except Exception as exc:
-            yield _sse_event("error", {"detail": str(exc)})
+            logger.exception("Chat stream failed for agent %s", agent.name, exc_info=exc)
+            yield _sse_event("error", {"detail": "Chat stream failed"})
             yield _sse_event("done", {})
 
     return StreamingResponse(

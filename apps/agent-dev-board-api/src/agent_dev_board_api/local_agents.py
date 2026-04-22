@@ -14,6 +14,9 @@ from typing import Any
 
 import yaml
 
+_APP_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_\.]*:[A-Za-z_][A-Za-z0-9_]*$")
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -98,6 +101,80 @@ class LocalAgentManager:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.instances_dir.mkdir(parents=True, exist_ok=True)
 
+    def _validated_repo_path(self, value: Any, *, field_name: str) -> Path:
+        candidate = Path(str(value or "")).expanduser().resolve(strict=False)
+        if not candidate.exists():
+            raise RuntimeError(f"{field_name} not found")
+        if not candidate.is_relative_to(self.repo_root):
+            raise RuntimeError(f"{field_name} must stay within the repository")
+        return candidate
+
+    def _validated_template(self, template_id: str) -> dict[str, Any]:
+        template = dict(self._template(template_id))
+        template["agent_space_dir"] = self._validated_repo_path(
+            template.get("agent_space_dir"),
+            field_name="Template agent space",
+        )
+        template["app_dir"] = self._validated_repo_path(
+            template.get("app_dir"),
+            field_name="Template app dir",
+        )
+        app_module = str(template.get("app_module") or "").strip()
+        if not _APP_MODULE_RE.fullmatch(app_module):
+            raise RuntimeError("Template app module is invalid")
+        template["app_module"] = app_module
+        return template
+
+    def _validated_instance_dir(self, item: dict[str, Any]) -> Path:
+        normalized_name = _slugify(item.get("name"))
+        if not normalized_name:
+            raise ValueError("Agent name is required")
+        expected = self._instance_dir(normalized_name).resolve(strict=False)
+        if not expected.is_relative_to(self.instances_dir):
+            raise RuntimeError("Local agent runtime directory is invalid")
+        configured = Path(str(item.get("instance_dir") or expected)).expanduser().resolve(strict=False)
+        if configured != expected:
+            raise RuntimeError("Local agent runtime directory is invalid")
+        return expected
+
+    def _validated_runtime_port(self, item: dict[str, Any]) -> int:
+        try:
+            port = int(item.get("port") or 0)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Local agent port is invalid") from exc
+        if port < 1024 or port > 65535:
+            raise RuntimeError("Local agent port is invalid")
+        return port
+
+    def _validated_runtime_host(self, item: dict[str, Any]) -> str:
+        host = str(item.get("host") or "").strip() or "127.0.0.1"
+        if host not in _LOOPBACK_HOSTS:
+            raise RuntimeError("Local agent host must stay on loopback")
+        return "127.0.0.1"
+
+    def _validated_runtime_item(self, item: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        normalized_name = _slugify(item.get("name"))
+        if not normalized_name:
+            raise ValueError("Agent name is required")
+        template = self._validated_template(str(item.get("template_id") or ""))
+        instance_dir = self._validated_instance_dir({
+            "name": normalized_name,
+            "instance_dir": item.get("instance_dir"),
+        })
+        host = self._validated_runtime_host(item)
+        port = self._validated_runtime_port(item)
+        normalized_item = {
+            **item,
+            "name": normalized_name,
+            "label": str(item.get("label") or "").strip() or _display_label(normalized_name),
+            "template_id": template["id"],
+            "host": host,
+            "port": port,
+            "base_url": f"http://{host}:{port}",
+            "instance_dir": str(instance_dir),
+        }
+        return normalized_item, template
+
     def ensure_runtime_files(self) -> None:
         if not self.registry_path.exists():
             self._save_registry({"agents": []})
@@ -155,6 +232,24 @@ class LocalAgentManager:
         ]
 
     def _refresh_agent_state(self, item: dict[str, Any]) -> dict[str, Any]:
+        try:
+            item, _ = self._validated_runtime_item(item)
+        except Exception:
+            normalized_name = _slugify(item.get("name")) or "invalid_local_agent"
+            try:
+                port = int(item.get("port") or 0)
+            except (TypeError, ValueError):
+                port = 0
+            item["name"] = normalized_name
+            item["label"] = str(item.get("label") or "").strip() or _display_label(normalized_name)
+            item["template_id"] = str(item.get("template_id") or "me_agent")
+            item["host"] = "127.0.0.1"
+            item["port"] = port
+            item["base_url"] = f"http://127.0.0.1:{port}" if port > 0 else ""
+            item["instance_dir"] = str(item.get("instance_dir") or self._instance_dir(normalized_name))
+            item["status"] = "invalid"
+            item["pid"] = None
+            return item
         pid = int(item.get("pid") or 0) or None
         status = str(item.get("status") or "").strip().lower() or "stopped"
         if status == "running" and not _is_pid_running(pid):
@@ -218,7 +313,7 @@ class LocalAgentManager:
         return template
 
     def _copy_template(self, template: dict[str, Any], destination: Path) -> None:
-        agent_space_src = Path(template["agent_space_dir"]).resolve()
+        agent_space_src = Path(template["agent_space_dir"]).resolve(strict=False)
         if not agent_space_src.exists():
             raise RuntimeError(f"Template agent_space not found: {agent_space_src}")
         shutil.copytree(
@@ -242,7 +337,7 @@ class LocalAgentManager:
             gitkeep.write_text("", encoding="utf-8")
 
     def _write_env_file(self, item: dict[str, Any]) -> Path:
-        instance_dir = Path(item["instance_dir"])
+        instance_dir = self._validated_instance_dir(item)
         env_path = instance_dir / ".env"
         foundry_url = str(item.get("foundry_url") or "").strip()
         lines = [
@@ -259,14 +354,14 @@ class LocalAgentManager:
         return env_path
 
     def _spawn_agent(self, item: dict[str, Any]) -> dict[str, Any]:
-        instance_dir = Path(item["instance_dir"])
-        template = self._template(item["template_id"])
+        item, template = self._validated_runtime_item(item)
+        instance_dir = self._validated_instance_dir(item)
         logs_dir = instance_dir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         log_path = logs_dir / "agent.log"
         env_path = self._write_env_file(item)
         pythonpath_entries = [
-            str(Path(template["app_dir"]).resolve()),
+            str(Path(template["app_dir"]).resolve(strict=False)),
             str((self.repo_root / "packages" / "python-sdk" / "src").resolve()),
         ]
         existing_pythonpath = os.environ.get("PYTHONPATH", "").strip()
@@ -316,7 +411,7 @@ class LocalAgentManager:
         preferred_port: int | None = None,
         foundry_url: str = "",
     ) -> dict[str, Any]:
-        template = self._template(template_id)
+        template = self._validated_template(template_id)
         normalized_name = _slugify(name)
         if not normalized_name:
             raise ValueError("Agent name is required")
