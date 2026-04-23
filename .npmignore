@@ -1,6 +1,10 @@
+# Python caches and local build artifacts
 **/__pycache__/
 **/*.py[cod]
 **/*.egg-info/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
 **/node_modules/
 **/dist/
 **/.venv/

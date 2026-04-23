@@ -178,10 +178,10 @@ That control plane is meant to be used with `FoundrySandboxClient`.
 
 ## Optional: Developer bootstrap from Agent Dev Board
 
-The current board flow connects directly to the real `https://foundry.cochiper.com` onboarding path from the `Guided setup` page.
+The current board flow connects directly to the real CoChiper Foundry onboarding path from the `Guided setup` page. Use `https://foundry.cochiper.com` for CN or `https://foundry.cochiper.ai` for WW.
 
 1. open `Guided setup`
-2. keep the Foundry URL set to `https://foundry.cochiper.com` unless you are targeting another compatible Foundry
+2. choose `https://foundry.cochiper.com` (CN) or `https://foundry.cochiper.ai` (WW), or enter another compatible Foundry URL manually
 3. click `Login with GitHub`
 4. request a bootstrap ticket for the selected local agent
 5. let the board install a `discovery_claim_token`, Foundry URL, and public base URL into that agent

@@ -162,6 +162,11 @@ type CreateAgentForm = {
 
 const API_PORT = import.meta.env.VITE_API_PORT || "8090";
 const DEFAULT_FOUNDRY_URL = "https://foundry.cochiper.com";
+const CUSTOM_FOUNDRY_PRESET_ID = "__custom__";
+const FOUNDRY_URL_PRESETS = [
+  { id: "cochiper-com", label: "CoChiper .com (CN)", url: "https://foundry.cochiper.com" },
+  { id: "cochiper-ai", label: "CoChiper .ai (WW)", url: "https://foundry.cochiper.ai" },
+] as const;
 
 const DEFAULT_API_BASE =
   typeof window === "undefined"
@@ -203,6 +208,20 @@ function normalizeUrl(rawUrl: string): string {
   return `http://${value}`;
 }
 
+function foundryPresetId(rawUrl: string): string {
+  const normalized = normalizeUrl(rawUrl).toLowerCase();
+  if (!normalized) {
+    return CUSTOM_FOUNDRY_PRESET_ID;
+  }
+  const preset = FOUNDRY_URL_PRESETS.find((item) => item.url.toLowerCase() === normalized);
+  return preset?.id ?? CUSTOM_FOUNDRY_PRESET_ID;
+}
+
+function foundryPresetUrl(presetId: string): string {
+  const preset = FOUNDRY_URL_PRESETS.find((item) => item.id === presetId);
+  return preset?.url ?? "";
+}
+
 function displaySafeUrl(rawUrl: string, fallback = "n/a"): string {
   const normalized = normalizeUrl(rawUrl);
   if (!normalized) {
@@ -232,6 +251,51 @@ function displaySafeUrl(rawUrl: string, fallback = "n/a"): string {
 
 function boolValue(value: unknown): boolean {
   return value === true;
+}
+
+function FoundryUrlChooser({
+  label,
+  value,
+  onChange,
+  placeholder = DEFAULT_FOUNDRY_URL,
+  helper = "",
+}: {
+  label: string;
+  value: string;
+  onChange: (nextValue: string) => void;
+  placeholder?: string;
+  helper?: string;
+}) {
+  return (
+    <div className="foundry-url-picker">
+      <div className="foundry-url-grid">
+        <label>
+          Quick target
+          <select
+            value={foundryPresetId(value)}
+            onChange={(event) => {
+              const presetUrl = foundryPresetUrl(event.target.value);
+              if (presetUrl) {
+                onChange(presetUrl);
+              }
+            }}
+          >
+            <option value={CUSTOM_FOUNDRY_PRESET_ID}>Custom / other</option>
+            {FOUNDRY_URL_PRESETS.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.label} ({preset.url})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {label}
+          <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+        </label>
+      </div>
+      {helper ? <p className="muted foundry-url-helper">{helper}</p> : null}
+    </div>
+  );
 }
 
 async function readErrorMessage(response: Response): Promise<string> {
@@ -370,14 +434,19 @@ export default function App() {
   const developerGit = developerContext?.git ?? {};
   const developerGithub = developerContext?.github ?? {};
   const developerIdentity = developerContext?.developer_identity ?? {};
-  const normalizedFoundryUrl = normalizeUrl(foundryUrl || textValue(developerContext?.foundry?.url));
+  const explicitFoundryUrl = normalizeUrl(foundryUrl);
+  const normalizedFoundryUrl = explicitFoundryUrl || normalizeUrl(textValue(developerContext?.foundry?.url));
   const foundryPortalUrl =
     normalizeUrl(
       textValue(
-        foundryBootstrapSession?.foundry_url,
-        textValue(handshakeResult?.foundry.url, normalizedFoundryUrl || DEFAULT_FOUNDRY_URL),
+        explicitFoundryUrl,
+        textValue(
+          foundryBootstrapSession?.foundry_url,
+          textValue(handshakeResult?.foundry.url, normalizedFoundryUrl || DEFAULT_FOUNDRY_URL),
+        ),
       ),
     ) || DEFAULT_FOUNDRY_URL;
+  const foundryPortalDisplayUrl = displaySafeUrl(foundryPortalUrl);
   const displayedDeveloperLogin = textValue(
     foundryBootstrapSession?.github_login,
     textValue(developerGithub.login, "not detected"),
@@ -997,14 +1066,14 @@ export default function App() {
           </a>
           <a
             className="external-link-chip"
-            href="https://foundry.cochiper.com"
+            href={foundryPortalUrl}
             target="_blank"
             rel="noreferrer"
-            aria-label="Open Foundry"
-            title="Open Foundry"
+            aria-label={`Open Foundry (${foundryPortalDisplayUrl})`}
+            title={`Open Foundry (${foundryPortalDisplayUrl})`}
           >
             <img className="external-link-logo" src={CC_LOGO_URL} alt="" aria-hidden="true" />
-            <span className="sr-only">Open Foundry</span>
+            <span className="sr-only">Open Foundry ({foundryPortalDisplayUrl})</span>
           </a>
         </div>
 
@@ -1138,14 +1207,12 @@ export default function App() {
                     </p>
                   </div>
                 </div>
-                <label>
-                  Foundry URL
-                  <input
-                    value={foundryUrl}
-                    onChange={(event) => setFoundryUrl(event.target.value)}
-                    placeholder="https://foundry.cochiper.com"
-                  />
-                </label>
+                <FoundryUrlChooser
+                  label="Foundry URL"
+                  value={foundryUrl}
+                  onChange={setFoundryUrl}
+                  helper=".com is the CN target, .ai is the WW target. You can still type any other compatible Foundry URL."
+                />
                 {developerSessionReady ? (
                   <div className="reply">
                     <strong>{displayedDeveloperLogin}</strong>
@@ -1312,12 +1379,17 @@ export default function App() {
                   <div>
                     <h4>Test the agent in Foundry</h4>
                     <p className="muted">
-                      Open <code>{foundryPortalUrl}</code> and validate the same agent inside the live Foundry product after
-                      bootstrap is approved.
+                      Use the same Foundry target as step 2, or switch it here before you open <code>{foundryPortalUrl}</code>{" "}
+                      to validate the same agent inside the live Foundry product after bootstrap is approved.
                     </p>
                   </div>
                 </div>
+                <FoundryUrlChooser label="Foundry portal URL" value={foundryUrl} onChange={setFoundryUrl} />
                 <div className="kv-list compact-kv">
+                  <div>
+                    <span>Portal target</span>
+                    <strong>{displaySafeUrl(foundryPortalUrl)}</strong>
+                  </div>
                   <div>
                     <span>Foundry access</span>
                     <strong>GitHub sign-in only</strong>
@@ -1341,7 +1413,7 @@ export default function App() {
                 </div>
                 <div className="actions split-actions">
                   <button onClick={openFoundryPortal} disabled={!onboardingApproved}>
-                    Open Foundry to test agent
+                    Open selected Foundry to test agent
                   </button>
                   <button className="secondary" onClick={() => setActiveView("playground")} disabled={!selectedAgent}>
                     Back to playground
@@ -1497,14 +1569,12 @@ export default function App() {
                       placeholder="8085"
                     />
                   </label>
-                  <label>
-                    Foundry URL for bootstrap
-                    <input
-                      value={foundryUrl}
-                      onChange={(event) => setFoundryUrl(event.target.value)}
-                      placeholder="https://foundry.cochiper.com"
-                    />
-                  </label>
+                  <FoundryUrlChooser
+                    label="Foundry URL for bootstrap"
+                    value={foundryUrl}
+                    onChange={setFoundryUrl}
+                    helper=".com is the CN target, .ai is the WW target. You can still type any other compatible Foundry URL."
+                  />
                   <div className="actions split-actions">
                     <button onClick={createLocalAgent} disabled={localAgentLoading}>
                       {localAgentLoading ? "Creating..." : "Create from template"}

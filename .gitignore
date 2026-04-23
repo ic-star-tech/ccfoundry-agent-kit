@@ -1,13 +1,13 @@
 .DS_Store
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# Python caches and local build artifacts
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
 *.tsbuildinfo
+ccfoundry-*.tgz
 .venv/
 venv/
 node_modules/

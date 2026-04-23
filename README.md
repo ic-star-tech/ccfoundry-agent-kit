@@ -6,7 +6,7 @@
 
 An open-source framework for building agents that learn, evolve, and collaborate — without giving up their soul.
 
-`ccfoundry-agent-kit` lets you create self-hosted AI agents that grow through interaction, accumulate knowledge and skills, and — when ready — connect to [CoChiper Foundry](https://foundry.cochiper.com) to leverage shared AI infrastructure and help others, all while keeping their private identity and data under their own control.
+`ccfoundry-agent-kit` lets you create self-hosted AI agents that grow through interaction, accumulate knowledge and skills, and — when ready — connect to CoChiper Foundry (`https://foundry.cochiper.com` for CN or `https://foundry.cochiper.ai` for WW) to leverage shared AI infrastructure and help others, all while keeping their private identity and data under their own control.
 
 ## The Idea
 

@@ -602,6 +602,24 @@ textarea {
   gap: 16px;
 }
 
+.foundry-url-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.foundry-url-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.foundry-url-helper {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
 .step-header {
   display: grid;
   grid-template-columns: 44px 1fr;
@@ -841,5 +859,9 @@ textarea {
   .kv-list > div {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .foundry-url-grid {
+    grid-template-columns: 1fr;
   }
 }

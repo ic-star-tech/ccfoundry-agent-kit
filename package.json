@@ -1,6 +1,6 @@
 {
   "name": "ccfoundry",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "CLI for CCFoundry Agent Kit and Agent Dev Board",
   "type": "module",
   "license": "MIT",
@@ -46,7 +46,9 @@
     "apps/agent-dev-board-web/vite.config.ts",
     "apps/agent-dev-board-web/public/brand/",
     "apps/agent-dev-board-web/src/",
-    "docs/assets/readme-agent-dev-board-banner.svg"
+    "docs/assets/readme-agent-dev-board-banner.svg",
+    "!**/__pycache__/**",
+    "!**/*.pyc"
   ],
   "publishConfig": {
     "access": "public"

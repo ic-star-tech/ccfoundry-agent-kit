@@ -78,7 +78,7 @@ For developer bootstrap, the board can:
 - detect local git remotes
 - inspect GitHub identity and repository context through the local API
 - open a Foundry-hosted GitHub OAuth popup and receive a short-lived developer bootstrap token
-- default to `https://foundry.cochiper.com` for the Foundry URL
+- default to `https://foundry.cochiper.com`, while also exposing quick presets for `https://foundry.cochiper.ai` and custom Foundry URLs
 - call Foundry `bootstrap-ticket` endpoints
 - install the returned `discovery_claim_token`, Foundry URL, and public base URL into a running agent
 
