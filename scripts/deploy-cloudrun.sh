@@ -172,7 +172,7 @@ if ! $DRY_RUN; then
     run gcloud run services update "$SERVICE_NAME" \
         --project="$GCP_PROJECT" \
         --region="$GCP_REGION" \
-        --set-env-vars="FOUNDRY_AGENT_PUBLIC_URL=${SERVICE_URL}" \
+        --update-env-vars="FOUNDRY_AGENT_PUBLIC_URL=${SERVICE_URL}" \
         --quiet
 else
     SERVICE_URL="https://${SERVICE_NAME}-xxx.run.app"
