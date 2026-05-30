@@ -38,6 +38,7 @@ npm run dev-board:lan
 Its purpose is to make agent-side development and Foundry bootstrap debugging easy:
 
 - create and manage local agents
+- deploy a selected local agent to Google Cloud Run
 - inspect manifests and runtime metadata
 - send direct or inline chat requests
 - apply temporary LLM overrides
@@ -63,10 +64,24 @@ Each local agent is materialized into its own runtime directory under `.dev-boar
 
 If an existing agent was created before a resource-bearing skill copied its resources, reinstall that skill or copy the missing resource directory into the agent instance before running bounty execution.
 
+## Cloud Run Deployment
+
+The `Agent card -> Cloud Run` tab wraps the headless Cloud Run deploy flow from [Cloud Run Deployment](cloud-run-deployment.md). It checks local `gcloud` / Docker status, shows the active Google account and project, and starts an asynchronous deployment job for the selected local agent.
+
+The deployment job uses the selected agent instance's `agent_space` directory as the build input and calls:
+
+```bash
+scripts/deploy-cloudrun.sh <agent-name> --agent-space .dev-board/agents/<agent>/agent_space
+```
+
+Dev Board stores deployment job logs under its runtime directory and polls them from the UI. A dry run is available from the same panel; it prints the Docker and `gcloud` commands without pushing or deploying.
+
+The Cloud Run flow expects `gcloud auth login` to have been completed on the machine running the Dev Board API. The UI surfaces the current auth status and the login command when no active account is detected.
+
 ## Components
 
 - `apps/agent-dev-board-api`
-  A small FastAPI service that creates local agents from templates, proxies requests to configured local agents, and talks to Foundry-side developer bootstrap endpoints.
+  A small FastAPI service that creates local agents from templates, proxies requests to configured local agents, talks to Foundry-side developer bootstrap endpoints, and launches Cloud Run deployment jobs.
 - `apps/agent-dev-board-web`
   A React UI with three top-level views:
   - guided setup

@@ -26,7 +26,9 @@
   "files": [
     "README.md",
     "LICENSE",
+    "Dockerfile.cloudrun",
     "scripts/dev-board.mjs",
+    "scripts/deploy-cloudrun.sh",
     "packages/python-sdk/pyproject.toml",
     "packages/python-sdk/README.md",
     "packages/python-sdk/src/ccfoundry_agent_kit/",
@@ -46,6 +48,7 @@
     "apps/agent-dev-board-web/vite.config.ts",
     "apps/agent-dev-board-web/public/brand/",
     "apps/agent-dev-board-web/src/",
+    "docs/cloud-run-deployment.md",
     "docs/assets/readme-agent-dev-board-banner.svg",
     "!**/__pycache__/**",
     "!**/*.pyc"

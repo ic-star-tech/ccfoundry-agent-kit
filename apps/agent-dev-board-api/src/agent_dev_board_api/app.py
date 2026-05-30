@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ccfoundry_agent_kit import AgentClient, ChatRequest, ContextMode
+from agent_dev_board_api.cloud_run import CloudRunManager
 from agent_dev_board_api.local_agents import LocalAgentManager
 from agent_dev_board_api.skill_store import SkillStore
 
@@ -105,12 +106,26 @@ class LocalAgentCreateRequest(BaseModel):
     foundry_url: str = ""
 
 
+class CloudRunDeployRequest(BaseModel):
+    agent_name: str
+    project: str = "glassy-fort-497911-u3"
+    region: str = "us-central1"
+    foundry_url: str = ""
+    min_instances: int = 0
+    memory: str = "512Mi"
+    cpu: str = "1"
+    poll_schedule: str = "* * * * *"
+    skip_scheduler: bool = False
+    dry_run: bool = False
+
+
 LOCAL_AGENT_MANAGER = LocalAgentManager(
     repo_root=REPO_ROOT,
     runtime_dir=RUNTIME_DIR,
     agents_file=AGENTS_FILE,
     venv_python=VENV_PYTHON,
 )
+CLOUD_RUN_MANAGER = CloudRunManager(repo_root=REPO_ROOT, runtime_dir=RUNTIME_DIR)
 
 
 def _load_agents() -> dict[str, LiteAgentConfig]:
@@ -550,6 +565,66 @@ async def stop_local_agent(agent_name: str) -> LocalAgentRuntime:
         raise HTTPException(status_code=409, detail="Local agent configuration is invalid") from exc
     LOCAL_AGENT_MANAGER.ensure_runtime_files()
     return LocalAgentRuntime.model_validate(item)
+
+
+# ---------------------------------------------------------------------------
+# Cloud Run deployment endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/cloud-run/status")
+async def cloud_run_status() -> dict[str, Any]:
+    return CLOUD_RUN_MANAGER.status()
+
+
+@app.get("/api/cloud-run/deployments")
+async def list_cloud_run_deployments(limit: int = 20) -> list[dict[str, Any]]:
+    return CLOUD_RUN_MANAGER.list_deployments(limit=limit)
+
+
+@app.get("/api/cloud-run/deployments/{job_id}")
+async def get_cloud_run_deployment(job_id: str) -> dict[str, Any]:
+    try:
+        return CLOUD_RUN_MANAGER.get_deployment(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/cloud-run/deploy")
+async def deploy_cloud_run(request: CloudRunDeployRequest) -> dict[str, Any]:
+    try:
+        _, item = LOCAL_AGENT_MANAGER._find_agent(request.agent_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Agent not found") from exc
+    instance_dir = Path(item.get("instance_dir", ""))
+    foundry_url = request.foundry_url or str(item.get("foundry_url") or "")
+    try:
+        return CLOUD_RUN_MANAGER.start_deployment(
+            agent_name=str(item.get("name") or request.agent_name),
+            instance_dir=instance_dir,
+            foundry_url=foundry_url,
+            project=request.project,
+            region=request.region,
+            min_instances=request.min_instances,
+            memory=request.memory,
+            cpu=request.cpu,
+            poll_schedule=request.poll_schedule,
+            skip_scheduler=request.skip_scheduler,
+            dry_run=request.dry_run,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        logger.warning("Cloud Run deployment failed to start for %s", request.agent_name, exc_info=exc)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/cloud-run/deployments/{job_id}/cancel")
+async def cancel_cloud_run_deployment(job_id: str) -> dict[str, Any]:
+    try:
+        return CLOUD_RUN_MANAGER.cancel_deployment(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

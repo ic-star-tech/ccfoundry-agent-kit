@@ -67,6 +67,19 @@ This will:
 3. Deploy to Cloud Run with `AGENT_DEPLOY_MODE=cloud_run`
 4. Create a Cloud Scheduler job to poll every minute
 
+## Deploy From Agent Dev Board
+
+The Dev Board UI exposes the same deploy path in `Agent card -> Cloud Run`.
+
+Use it after creating a local agent from a template. The UI will:
+
+1. Check whether `gcloud` and Docker are available on the Dev Board API host
+2. Show the active Google account, project, and region
+3. Let you run a dry-run deployment for the selected agent
+4. Start the real deploy script asynchronously and stream job logs into the panel
+
+The UI uses the selected agent instance directory as the `--agent-space` input, so installed Skill Store resources are included in the Cloud Run image. If `gcloud` is not authenticated, run `gcloud auth login` on the machine hosting the Dev Board API, then refresh the Cloud Run tab.
+
 ### Script Options
 
 ```

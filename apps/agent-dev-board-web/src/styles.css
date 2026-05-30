@@ -690,6 +690,25 @@ textarea {
   gap: 16px;
 }
 
+.cloud-run-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.cloud-run-toggle {
+  width: fit-content;
+  margin-top: 14px;
+}
+
+.cloud-run-log {
+  max-height: 420px;
+}
+
+.cloud-run-history {
+  margin-top: 16px;
+}
+
 .runtime-card {
   border: 1px solid rgba(214, 222, 239, 0.92);
   border-radius: 24px;
@@ -811,6 +830,10 @@ textarea {
 
   .timeline-grid,
   .runtime-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cloud-run-form-grid {
     grid-template-columns: 1fr;
   }
 }

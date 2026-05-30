@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 type ContextMode = "direct" | "inline";
 type BoardView = "guide" | "agent" | "playground" | "earnings" | "skills" | "jobs";
-type AgentCardTab = "overview" | "runtimes" | "runtime" | "profile";
+type AgentCardTab = "overview" | "runtimes" | "cloud-run" | "runtime" | "profile";
 
 type AgentManifest = {
   name: string;
@@ -160,6 +160,65 @@ type CreateAgentForm = {
   preferred_port: string;
 };
 
+type CloudRunForm = {
+  project: string;
+  region: string;
+  memory: string;
+  cpu: string;
+  min_instances: string;
+  poll_schedule: string;
+  skip_scheduler: boolean;
+};
+
+type CloudRunStatus = {
+  ok?: boolean;
+  gcloud?: {
+    installed?: boolean;
+    path?: string;
+    version?: string;
+    active_account?: string;
+    project?: string;
+    region?: string;
+    authenticated?: boolean;
+  };
+  docker?: {
+    installed?: boolean;
+    path?: string;
+    version?: string;
+  };
+  defaults?: {
+    project?: string;
+    region?: string;
+    artifact_repo?: string;
+  };
+  commands?: Record<string, string>;
+  errors?: string[];
+};
+
+type CloudRunDeployment = {
+  id: string;
+  agent_name: string;
+  service_name: string;
+  status: string;
+  dry_run?: boolean;
+  project?: string;
+  region?: string;
+  command?: string[];
+  logs?: string[];
+  return_code?: number | null;
+  result?: {
+    image_tag?: string;
+    scheduler_job?: string;
+    service_url?: string;
+    health_url?: string;
+    poll_url?: string;
+  };
+  error?: string;
+  created_at?: string;
+  started_at?: string;
+  finished_at?: string;
+};
+
 const API_PORT = import.meta.env.VITE_API_PORT || "8090";
 const DEFAULT_FOUNDRY_URL = "https://foundry.cochiper.com";
 const CUSTOM_FOUNDRY_PRESET_ID = "__custom__";
@@ -189,6 +248,7 @@ const NAV_ITEMS: Array<{ id: BoardView; label: string; kicker: string }> = [
 const AGENT_CARD_TABS: Array<{ id: AgentCardTab; label: string; helper: string }> = [
   { id: "overview", label: "Overview", helper: "Agent, mode, and quick status" },
   { id: "runtimes", label: "Local runtimes", helper: "Create and manage local agents" },
+  { id: "cloud-run", label: "Cloud Run", helper: "Deploy selected agents to Google Cloud Run" },
   { id: "runtime", label: "Runtime LLM", helper: "Gateway source and dev overrides" },
   { id: "profile", label: "Profile", helper: "Manifest, skills, and template info" },
 ];
@@ -1359,6 +1419,21 @@ export default function App() {
     label: "",
     preferred_port: "",
   });
+  const [cloudRunStatus, setCloudRunStatus] = useState<CloudRunStatus | null>(null);
+  const [cloudRunStatusLoading, setCloudRunStatusLoading] = useState(false);
+  const [cloudRunError, setCloudRunError] = useState("");
+  const [cloudRunDeployments, setCloudRunDeployments] = useState<CloudRunDeployment[]>([]);
+  const [cloudRunCurrentJob, setCloudRunCurrentJob] = useState<CloudRunDeployment | null>(null);
+  const [cloudRunDeploying, setCloudRunDeploying] = useState(false);
+  const [cloudRunForm, setCloudRunForm] = useState<CloudRunForm>({
+    project: "glassy-fort-497911-u3",
+    region: "us-central1",
+    memory: "512Mi",
+    cpu: "1",
+    min_instances: "0",
+    poll_schedule: "* * * * *",
+    skip_scheduler: false,
+  });
 
   useEffect(() => {
     if (!selectedAgent) {
@@ -1378,7 +1453,19 @@ export default function App() {
     void refreshAgentInventory();
     void refreshDeveloperContext(foundryUrl);
     void fetchSettlements();
+    void refreshCloudRunStatus();
+    void refreshCloudRunDeployments();
   }, []);
+
+  useEffect(() => {
+    if (!cloudRunCurrentJob || !["queued", "running"].includes(textValue(cloudRunCurrentJob.status))) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refreshCloudRunDeployment(cloudRunCurrentJob.id);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [cloudRunCurrentJob?.id, cloudRunCurrentJob?.status]);
 
   const selectedAgentEntry = useMemo(
     () => agents.find((agent) => agent.name === selectedAgent) ?? null,
@@ -1740,6 +1827,13 @@ export default function App() {
     }));
   }
 
+  function updateCloudRunForm<K extends keyof CloudRunForm>(key: K, value: CloudRunForm[K]) {
+    setCloudRunForm((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  }
+
   async function refreshAgentInventory(preferredSelection = "") {
     setLocalAgentLoading(true);
     setLocalAgentError("");
@@ -1909,6 +2003,124 @@ export default function App() {
       setLocalAgentError(String(err));
     } finally {
       setLocalAgentLoading(false);
+    }
+  }
+
+  async function refreshCloudRunStatus() {
+    setCloudRunStatusLoading(true);
+    setCloudRunError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/cloud-run/status`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as CloudRunStatus;
+      setCloudRunStatus(payload);
+      const defaults = payload.defaults || {};
+      setCloudRunForm((prev) => ({
+        ...prev,
+        project: prev.project || textValue(defaults.project, "glassy-fort-497911-u3"),
+        region: prev.region || textValue(defaults.region, "us-central1"),
+      }));
+    } catch (err) {
+      setCloudRunError(String(err));
+    } finally {
+      setCloudRunStatusLoading(false);
+    }
+  }
+
+  async function refreshCloudRunDeployments() {
+    try {
+      const response = await fetch(`${API_BASE}/api/cloud-run/deployments`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = expectArray<CloudRunDeployment>(await response.json(), "Cloud Run deployments");
+      setCloudRunDeployments(payload);
+      setCloudRunCurrentJob((current) => current || payload[0] || null);
+    } catch (err) {
+      setCloudRunError(String(err));
+    }
+  }
+
+  async function refreshCloudRunDeployment(jobId: string) {
+    if (!jobId) {
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/api/cloud-run/deployments/${encodeURIComponent(jobId)}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as CloudRunDeployment;
+      setCloudRunCurrentJob(payload);
+      setCloudRunDeployments((prev) => {
+        const without = prev.filter((item) => item.id !== payload.id);
+        return [payload, ...without].slice(0, 20);
+      });
+    } catch (err) {
+      setCloudRunError(String(err));
+    }
+  }
+
+  async function deployCloudRun(dryRun: boolean) {
+    const agentName = selectedLocalAgent?.name || selectedAgent;
+    if (!agentName) {
+      setCloudRunError("Select or create a local agent first.");
+      return;
+    }
+    const minInstances = Number.parseInt(cloudRunForm.min_instances, 10);
+    setCloudRunDeploying(true);
+    setCloudRunError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/cloud-run/deploy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_name: agentName,
+          project: cloudRunForm.project.trim(),
+          region: cloudRunForm.region.trim(),
+          foundry_url: normalizedFoundryUrl || foundryUrl,
+          min_instances: Number.isInteger(minInstances) ? minInstances : 0,
+          memory: cloudRunForm.memory.trim() || "512Mi",
+          cpu: cloudRunForm.cpu.trim() || "1",
+          poll_schedule: cloudRunForm.poll_schedule.trim() || "* * * * *",
+          skip_scheduler: cloudRunForm.skip_scheduler,
+          dry_run: dryRun,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as CloudRunDeployment;
+      setCloudRunCurrentJob(payload);
+      setCloudRunDeployments((prev) => [payload, ...prev.filter((item) => item.id !== payload.id)].slice(0, 20));
+      window.setTimeout(() => {
+        void refreshCloudRunDeployment(payload.id);
+      }, 1200);
+    } catch (err) {
+      setCloudRunError(String(err));
+    } finally {
+      setCloudRunDeploying(false);
+    }
+  }
+
+  async function cancelCloudRunDeployment() {
+    if (!cloudRunCurrentJob) {
+      return;
+    }
+    setCloudRunError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/cloud-run/deployments/${encodeURIComponent(cloudRunCurrentJob.id)}/cancel`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as CloudRunDeployment;
+      setCloudRunCurrentJob(payload);
+    } catch (err) {
+      setCloudRunError(String(err));
     }
   }
 
@@ -2701,6 +2913,270 @@ export default function App() {
                       })}
                     </div>
                   )}
+                </section>
+              </>
+            ) : null}
+
+            {agentCardTab === "cloud-run" ? (
+              <>
+                <section className="panel">
+                  <div className="section-heading">
+                    <div>
+                      <p className="eyebrow">Google Cloud</p>
+                      <h3>gcloud status</h3>
+                    </div>
+                    <button className="secondary" onClick={refreshCloudRunStatus} disabled={cloudRunStatusLoading}>
+                      {cloudRunStatusLoading ? "Checking..." : "Refresh"}
+                    </button>
+                  </div>
+                  <div className="chips">
+                    <span className={`chip tone-${cloudRunStatus?.gcloud?.authenticated ? "success" : "warn"}`}>
+                      {cloudRunStatus?.gcloud?.authenticated ? "gcloud authenticated" : "gcloud login needed"}
+                    </span>
+                    <span className={`chip tone-${cloudRunStatus?.docker?.installed ? "success" : "warn"}`}>
+                      {cloudRunStatus?.docker?.installed ? "docker available" : "docker missing"}
+                    </span>
+                  </div>
+                  <div className="kv-list compact-kv">
+                    <div>
+                      <span>Account</span>
+                      <strong>{textValue(cloudRunStatus?.gcloud?.active_account, "not authenticated")}</strong>
+                    </div>
+                    <div>
+                      <span>Project</span>
+                      <strong>{textValue(cloudRunStatus?.gcloud?.project, textValue(cloudRunStatus?.defaults?.project, "not set"))}</strong>
+                    </div>
+                    <div>
+                      <span>Region</span>
+                      <strong>{textValue(cloudRunStatus?.gcloud?.region, textValue(cloudRunStatus?.defaults?.region, "us-central1"))}</strong>
+                    </div>
+                    <div>
+                      <span>gcloud</span>
+                      <strong>{textValue(cloudRunStatus?.gcloud?.version, "not found")}</strong>
+                    </div>
+                    <div>
+                      <span>Docker</span>
+                      <strong>{textValue(cloudRunStatus?.docker?.version, "not found")}</strong>
+                    </div>
+                  </div>
+                  {!cloudRunStatus?.gcloud?.authenticated ? (
+                    <div className="code-block">
+                      <pre>{textValue(cloudRunStatus?.commands?.login, "gcloud auth login")}</pre>
+                    </div>
+                  ) : null}
+                  {cloudRunStatus?.errors?.length ? (
+                    <div className="error">
+                      <strong>Cloud Run preflight</strong>
+                      <p>{cloudRunStatus.errors.join(" ")}</p>
+                    </div>
+                  ) : null}
+                </section>
+
+                <section className="panel">
+                  <div className="section-heading">
+                    <div>
+                      <p className="eyebrow">Deploy target</p>
+                      <h3>Selected agent</h3>
+                    </div>
+                  </div>
+                  <label>
+                    Target runtime
+                    <select
+                      value={selectedAgent}
+                      onChange={(event) => setSelectedAgent(event.target.value)}
+                      disabled={localAgents.length === 0}
+                    >
+                      {localAgents.length === 0 ? <option value="">Create one first</option> : null}
+                      {localAgents.map((agent) => (
+                        <option key={agent.name} value={agent.name}>
+                          {agent.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <FoundryUrlChooser
+                    label="Foundry URL"
+                    value={foundryUrl}
+                    onChange={setFoundryUrl}
+                    helper="The deployed agent registers against this Foundry and uses pull transport."
+                  />
+                  <div className="kv-list compact-kv">
+                    <div>
+                      <span>Instance</span>
+                      <strong>{textValue(selectedLocalAgent?.instance_dir, "select a local runtime")}</strong>
+                    </div>
+                    <div>
+                      <span>Template</span>
+                      <strong>{textValue(selectedLocalAgent?.template_id, "n/a")}</strong>
+                    </div>
+                    <div>
+                      <span>Current local URL</span>
+                      <strong>{displaySafeUrl(textValue(selectedLocalAgent?.base_url), "n/a")}</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="panel span-two">
+                  <div className="section-heading">
+                    <div>
+                      <p className="eyebrow">Cloud Run deployment</p>
+                      <h3>Build, push, deploy, and schedule polling</h3>
+                    </div>
+                    <button className="secondary" onClick={refreshCloudRunDeployments}>
+                      Refresh jobs
+                    </button>
+                  </div>
+                  <div className="cloud-run-form-grid">
+                    <label>
+                      GCP project
+                      <input
+                        value={cloudRunForm.project}
+                        onChange={(event) => updateCloudRunForm("project", event.target.value)}
+                        placeholder="glassy-fort-497911-u3"
+                      />
+                    </label>
+                    <label>
+                      Region
+                      <input
+                        value={cloudRunForm.region}
+                        onChange={(event) => updateCloudRunForm("region", event.target.value)}
+                        placeholder="us-central1"
+                      />
+                    </label>
+                    <label>
+                      Memory
+                      <input
+                        value={cloudRunForm.memory}
+                        onChange={(event) => updateCloudRunForm("memory", event.target.value)}
+                        placeholder="512Mi"
+                      />
+                    </label>
+                    <label>
+                      CPU
+                      <input
+                        value={cloudRunForm.cpu}
+                        onChange={(event) => updateCloudRunForm("cpu", event.target.value)}
+                        placeholder="1"
+                      />
+                    </label>
+                    <label>
+                      Min instances
+                      <input
+                        value={cloudRunForm.min_instances}
+                        onChange={(event) => updateCloudRunForm("min_instances", event.target.value)}
+                        placeholder="0"
+                      />
+                    </label>
+                    <label>
+                      Poll schedule
+                      <input
+                        value={cloudRunForm.poll_schedule}
+                        onChange={(event) => updateCloudRunForm("poll_schedule", event.target.value)}
+                        placeholder="* * * * *"
+                      />
+                    </label>
+                  </div>
+                  <label className="inline-toggle cloud-run-toggle">
+                    <input
+                      type="checkbox"
+                      checked={cloudRunForm.skip_scheduler}
+                      onChange={(event) => updateCloudRunForm("skip_scheduler", event.target.checked)}
+                    />
+                    Skip Cloud Scheduler
+                  </label>
+                  <div className="actions split-actions">
+                    <button
+                      className="secondary"
+                      onClick={() => deployCloudRun(true)}
+                      disabled={cloudRunDeploying || !selectedLocalAgent}
+                    >
+                      Dry run
+                    </button>
+                    <button
+                      onClick={() => deployCloudRun(false)}
+                      disabled={cloudRunDeploying || !selectedLocalAgent || !cloudRunStatus?.gcloud?.authenticated}
+                    >
+                      {cloudRunDeploying ? "Starting..." : "Deploy to Cloud Run"}
+                    </button>
+                    {cloudRunCurrentJob && ["queued", "running"].includes(textValue(cloudRunCurrentJob.status)) ? (
+                      <button className="secondary" onClick={cancelCloudRunDeployment}>
+                        Cancel
+                      </button>
+                    ) : null}
+                  </div>
+                  {cloudRunError ? <div className="error">{cloudRunError}</div> : null}
+                </section>
+
+                <section className="panel span-two">
+                  <div className="section-heading">
+                    <div>
+                      <p className="eyebrow">Deployment result</p>
+                      <h3>{cloudRunCurrentJob ? cloudRunCurrentJob.service_name : "No Cloud Run job selected"}</h3>
+                    </div>
+                    {cloudRunCurrentJob ? (
+                      <span className={`status-pill ${statusTone(textValue(cloudRunCurrentJob.status))}`}>
+                        {cloudRunCurrentJob.status}
+                      </span>
+                    ) : null}
+                  </div>
+                  {cloudRunCurrentJob ? (
+                    <>
+                      <div className="kv-list compact-kv">
+                        <div>
+                          <span>Job ID</span>
+                          <strong>{cloudRunCurrentJob.id}</strong>
+                        </div>
+                        <div>
+                          <span>Image</span>
+                          <strong>{textValue(cloudRunCurrentJob.result?.image_tag, "pending")}</strong>
+                        </div>
+                        <div>
+                          <span>Service URL</span>
+                          <strong>{displaySafeUrl(textValue(cloudRunCurrentJob.result?.service_url), "pending")}</strong>
+                        </div>
+                        <div>
+                          <span>Scheduler</span>
+                          <strong>{textValue(cloudRunCurrentJob.result?.scheduler_job, cloudRunCurrentJob.dry_run ? "dry run" : "skipped")}</strong>
+                        </div>
+                      </div>
+                      {cloudRunCurrentJob.result?.service_url ? (
+                        <div className="actions split-actions">
+                          <a className="external-link-chip" href={cloudRunCurrentJob.result.service_url} target="_blank" rel="noreferrer">
+                            Service
+                          </a>
+                          <a className="external-link-chip" href={cloudRunCurrentJob.result.health_url} target="_blank" rel="noreferrer">
+                            Health
+                          </a>
+                        </div>
+                      ) : null}
+                      <div className="code-block cloud-run-log">
+                        <pre>{(cloudRunCurrentJob.logs || []).join("\n") || "Waiting for deployment output..."}</pre>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="empty-state">
+                      <h4>No deployment jobs yet</h4>
+                      <p className="muted">Start with a dry run to preview the gcloud and Docker commands for the selected agent.</p>
+                    </div>
+                  )}
+                  {cloudRunDeployments.length > 1 ? (
+                    <div className="runtime-grid cloud-run-history">
+                      {cloudRunDeployments.slice(0, 4).map((job) => (
+                        <article key={job.id} className="runtime-card">
+                          <div className="card-header">
+                            <div>
+                              <h4>{job.service_name}</h4>
+                              <p className="muted">{job.id}</p>
+                            </div>
+                            <span className={`status-pill ${statusTone(textValue(job.status))}`}>{job.status}</span>
+                          </div>
+                          <button className="secondary" onClick={() => setCloudRunCurrentJob(job)}>
+                            View logs
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  ) : null}
                 </section>
               </>
             ) : null}

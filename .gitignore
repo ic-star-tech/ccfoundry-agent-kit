@@ -33,6 +33,7 @@ examples/me_agent/workspace/*
 # Agent Dev Board runtime data (created by running agents locally)
 apps/agent-dev-board-api/agents/
 apps/agent-dev-board-api/local_agents.json
+apps/agent-dev-board-api/cloud_run_deployments/
 
 # Temporary patch/debug scripts
 patch_*.py
