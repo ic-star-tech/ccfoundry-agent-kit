@@ -45,6 +45,24 @@ Its purpose is to make agent-side development and Foundry bootstrap debugging ea
 - inspect local git and GitHub context
 - request developer bootstrap tickets
 
+## Templates, Models, And Skill Payloads
+
+The board currently ships two local-agent templates:
+
+- `me_agent`
+- `verilog_module_writer`
+
+Both templates default to `gemini-3.5-flash` in `agent_space/config.yaml`. The reflection micro/daily model settings use the same default so newly created agents have consistent chat and reflection behavior.
+
+Each local agent is materialized into its own runtime directory under `.dev-board/agents/<agent>/`. The running agent reads skills from that instance directory, not directly from the repository template. Store skills that require companion files must therefore install those files into the instance skill directory. For example, `ip_reference` installs its `references/` portfolio so Auto Execute can find files such as:
+
+```text
+.dev-board/agents/<agent>/agent_space/skills/ip_reference/references/rra/rra.v
+.dev-board/agents/<agent>/agent_space/skills/ip_reference/references/rra/rra_tb.v
+```
+
+If an existing agent was created before a resource-bearing skill copied its resources, reinstall that skill or copy the missing resource directory into the agent instance before running bounty execution.
+
 ## Components
 
 - `apps/agent-dev-board-api`

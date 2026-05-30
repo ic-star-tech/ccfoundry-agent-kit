@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+
+
 # ---------------------------------------------------------------------------
 # Built-in skill catalogue
 # ---------------------------------------------------------------------------
@@ -323,6 +326,7 @@ _BUILTIN_SKILLS: list[dict[str, Any]] = [
         "description": "Browse the IP portfolio with reference implementations of common digital modules (RRA, FIFO, edge detector, priority encoder, etc.).",
         "author": "ccfoundry",
         "version": "1.0.0",
+        "resource_source_dir": _REPO_ROOT / "examples" / "verilog_module_writer" / "agent_space" / "skills" / "ip_reference",
         "skill_md": textwrap.dedent("""\
             ---
             name: ip_reference
@@ -453,6 +457,19 @@ class SkillStore:
         }
         meta_path = skill_dest / "skill_meta.json"
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+        resource_source_dir = skill.get("resource_source_dir")
+        if resource_source_dir:
+            source_dir = Path(resource_source_dir)
+            if source_dir.exists():
+                for item in source_dir.iterdir():
+                    if item.name in {"SKILL.md", "skill_meta.json"}:
+                        continue
+                    destination = skill_dest / item.name
+                    if item.is_dir():
+                        shutil.copytree(item, destination, dirs_exist_ok=True)
+                    elif item.is_file():
+                        shutil.copy2(item, destination)
 
         return {
             "ok": True,

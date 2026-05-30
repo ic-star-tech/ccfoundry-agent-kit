@@ -25,6 +25,8 @@ Copy `.env.example` to `.env` if you want real model calls.
 
 If no model is configured, the example still works with deterministic local responses.
 
+The template default model is `gemini-3.5-flash`. Foundry-approved agents can still receive an explicit model policy through bootstrap; when present, that policy takes precedence over the local template default.
+
 ## Foundry onboarding
 
 The demo can automatically talk to a modern Foundry:

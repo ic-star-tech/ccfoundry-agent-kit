@@ -1,5 +1,5 @@
 config_version: "1.0"
-model: ccfoundry-local
+model: gemini-3.5-flash
 temperature: 0.2
 max_tokens: 600
 prompt_file: /app/agent_space/SOUL.md
@@ -69,8 +69,8 @@ reflection:
   trigger: per_command
   auto_update_threshold: 0.85
   daily_cron: "0 23 * * *"
-  micro_model: ccfoundry-local
-  daily_model: ccfoundry-local
+  micro_model: gemini-3.5-flash
+  daily_model: gemini-3.5-flash
   update_target: notes_only
 service_fee:
   base: 0.0

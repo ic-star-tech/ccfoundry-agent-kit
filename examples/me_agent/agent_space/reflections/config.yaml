@@ -1,7 +1,7 @@
 enabled: true
 trigger: per_command
-micro_model: ccfoundry-local
-daily_model: ccfoundry-local
+micro_model: gemini-3.5-flash
+daily_model: gemini-3.5-flash
 daily_cron: "0 23 * * *"
 auto_update_threshold: 0.85
 max_soul_append_lines: 10
