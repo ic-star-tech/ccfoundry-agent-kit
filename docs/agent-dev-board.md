@@ -66,7 +66,9 @@ If an existing agent was created before a resource-bearing skill copied its reso
 
 ## Cloud Run Deployment
 
-The `Agent card -> Cloud Run` tab wraps the headless Cloud Run deploy flow from [Cloud Run Deployment](cloud-run-deployment.md). It checks local `gcloud` / Docker status, shows the active Google account and project, and starts an asynchronous deployment job for the selected local agent.
+The guided setup flow has a first-step run target selector for `Local Agent` vs `Google Cloud Run`. Selecting `Google Cloud Run` keeps the template/source workspace flow in the same place, then shows Cloud Run preflight, project/region settings, dry-run, and real deploy controls.
+
+The `Agent card -> Cloud Run` tab exposes the same headless Cloud Run deploy flow from [Cloud Run Deployment](cloud-run-deployment.md). It checks local `gcloud` / Docker status, shows the active Google account and project, and starts an asynchronous deployment job for the selected agent.
 
 The deployment job uses the selected agent instance's `agent_space` directory as the build input and calls:
 
@@ -76,7 +78,7 @@ scripts/deploy-cloudrun.sh <agent-name> --agent-space .dev-board/agents/<agent>/
 
 Dev Board stores deployment job logs under its runtime directory and polls them from the UI. A dry run is available from the same panel; it prints the Docker and `gcloud` commands without pushing or deploying.
 
-The Cloud Run flow expects `gcloud auth login` to have been completed on the machine running the Dev Board API. The UI surfaces the current auth status and the login command when no active account is detected.
+The Cloud Run flow expects Google Cloud authentication on the machine running the Dev Board API. This can be a user login from `gcloud auth login` or a GCE/GVM service account with sufficient Cloud Run, Artifact Registry, and Cloud Scheduler permissions. The UI surfaces the current auth status and shows `gcloud auth login` when no active account is detected. Real deploy is disabled until `gcloud` is authenticated; dry-run remains available for command inspection.
 
 ## Components
 
@@ -91,6 +93,7 @@ The Cloud Run flow expects `gcloud auth login` to have been completed on the mac
   Inside `agent card`, the current tabs are:
   - overview
   - local runtimes
+  - Cloud Run
   - runtime LLM
   - profile
 

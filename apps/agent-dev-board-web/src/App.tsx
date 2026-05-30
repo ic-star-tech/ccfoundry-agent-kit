@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 type ContextMode = "direct" | "inline";
 type BoardView = "guide" | "agent" | "playground" | "earnings" | "skills" | "jobs";
 type AgentCardTab = "overview" | "runtimes" | "cloud-run" | "runtime" | "profile";
+type GuideRunTarget = "local" | "cloud_run";
 
 type AgentManifest = {
   name: string;
@@ -1406,6 +1407,7 @@ export default function App() {
   const [settlementsTotalEarned, setSettlementsTotalEarned] = useState(0);
   const [earningsAgentFilter, setEarningsAgentFilter] = useState("__all__");
   const [localAgentNotice, setLocalAgentNotice] = useState("");
+  const [guideRunTarget, setGuideRunTarget] = useState<GuideRunTarget>("local");
   const [foundryPortalOpened, setFoundryPortalOpened] = useState(false);
   const [developerForm, setDeveloperForm] = useState<DeveloperForm>({
     developer_token: "",
@@ -1529,6 +1531,16 @@ export default function App() {
   const onboardingRetired = registrationStatus === "RETIRED";
   const playgroundReady = Boolean(selectedAgentEntry && selectedAgentEntry.status === "online");
   const hasConversation = transcript.length > 0 || reply.trim().length > 0;
+  const selectedCloudRunDeployment = useMemo(
+    () => cloudRunDeployments.find((job) => job.agent_name === selectedAgent) ?? null,
+    [cloudRunDeployments, selectedAgent],
+  );
+  const displayedCloudRunDeployment =
+    cloudRunCurrentJob?.agent_name === selectedAgent ? cloudRunCurrentJob : selectedCloudRunDeployment;
+  const selectedCloudRunUrl = textValue(
+    displayedCloudRunDeployment?.result?.service_url,
+    textValue(selectedCloudRunDeployment?.result?.service_url),
+  );
 
   useEffect(() => {
     if (foundryUrl.trim()) {
@@ -2063,8 +2075,8 @@ export default function App() {
     }
   }
 
-  async function deployCloudRun(dryRun: boolean) {
-    const agentName = selectedLocalAgent?.name || selectedAgent;
+  async function deployCloudRun(dryRun: boolean, agentNameOverride = "") {
+    const agentName = agentNameOverride || selectedLocalAgent?.name || selectedAgent;
     if (!agentName) {
       setCloudRunError("Select or create a local agent first.");
       return;
@@ -2349,11 +2361,14 @@ export default function App() {
                 </div>
               </div>
               <p className="muted">
-                This guided setup keeps the happy path in one place: create a local agent, connect your developer identity,
-                let Foundry bootstrap it, run a local smoke test, and then verify the linked agent inside Foundry itself.
+                This guided setup keeps the happy path in one place: create an agent, choose where it runs, connect your
+                developer identity, let Foundry bootstrap it, and then verify the linked agent inside Foundry itself.
               </p>
               <div className="guide-progress">
-                <span className={`chip ${selectedLocalAgent ? "tone-success" : ""}`}>1. Agent created</span>
+                <span className={`chip ${selectedLocalAgent ? "tone-success" : ""}`}>1. Agent source</span>
+                <span className={`chip ${guideRunTarget === "cloud_run" ? "tone-success" : ""}`}>
+                  Target: {guideRunTarget === "cloud_run" ? "Cloud Run" : "Local"}
+                </span>
                 <span className={`chip ${developerSessionReady ? "tone-success" : ""}`}>2. Developer login</span>
                 <span className={`chip ${claimInstalled ? "tone-success" : ""}`}>3. Claim installed</span>
                 <span className={`chip ${onboardingApproved ? "tone-success" : onboardingRetired ? "tone-warn" : ""}`}>4. Foundry approved</span>
@@ -2367,19 +2382,52 @@ export default function App() {
                 <div className="step-header">
                   <span className="step-index">1</span>
                   <div>
-                    <h4>Create a local agent</h4>
+                    <h4>{guideRunTarget === "cloud_run" ? "Create a Google Cloud Run agent" : "Create a local agent"}</h4>
                     <p className="muted">
-                      Start from the template, give it a stable name, and let Dev Board manage its port and runtime.
+                      Start from the template, give it a stable name, and choose the runtime target before onboarding.
                     </p>
                   </div>
+                </div>
+                <div className="run-target-toggle" role="radiogroup" aria-label="Run target">
+                  <button
+                    type="button"
+                    className={`run-target-button ${guideRunTarget === "local" ? "active" : ""}`}
+                    onClick={() => setGuideRunTarget("local")}
+                  >
+                    <strong>Local Agent</strong>
+                    <span>Run from this Dev Board host.</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`run-target-button ${guideRunTarget === "cloud_run" ? "active" : ""}`}
+                    onClick={() => {
+                      setGuideRunTarget("cloud_run");
+                      void refreshCloudRunStatus();
+                    }}
+                  >
+                    <strong>Google Cloud Run</strong>
+                    <span>Build and run the agent in GCP.</span>
+                  </button>
                 </div>
                 {selectedLocalAgent ? (
                   <div className="reply">
                     <strong>{selectedLocalAgent.label}</strong>
-                    <p>
-                      Selected runtime: <code>{selectedLocalAgent.name}</code> at{" "}
-                      <code>{displaySafeUrl(selectedLocalAgent.base_url)}</code>
-                    </p>
+                    {guideRunTarget === "cloud_run" ? (
+                      <p>
+                        Source workspace: <code>{selectedLocalAgent.name}</code>
+                        {selectedCloudRunUrl ? (
+                          <>
+                            {" "}
+                            deployed at <code>{displaySafeUrl(selectedCloudRunUrl)}</code>
+                          </>
+                        ) : null}
+                      </p>
+                    ) : (
+                      <p>
+                        Selected runtime: <code>{selectedLocalAgent.name}</code> at{" "}
+                        <code>{displaySafeUrl(selectedLocalAgent.base_url)}</code>
+                      </p>
+                    )}
                   </div>
                 ) : null}
                 <label>
@@ -2412,18 +2460,155 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  Preferred port
+                  {guideRunTarget === "cloud_run" ? "Preferred local dev port" : "Preferred port"}
                   <input
                     value={createAgentForm.preferred_port}
                     onChange={(event) => updateCreateAgentForm("preferred_port", event.target.value)}
                     placeholder="8085"
                   />
                 </label>
+                {guideRunTarget === "cloud_run" ? (
+                  <div className="guide-cloud-run-panel">
+                    <div className="section-heading compact-heading">
+                      <div>
+                        <p className="eyebrow">Google Cloud</p>
+                        <h4>Cloud Run preflight</h4>
+                      </div>
+                      <button className="secondary" onClick={refreshCloudRunStatus} disabled={cloudRunStatusLoading}>
+                        {cloudRunStatusLoading ? "Checking..." : "Refresh"}
+                      </button>
+                    </div>
+                    <div className="chips">
+                      <span className={`chip tone-${cloudRunStatus?.gcloud?.authenticated ? "success" : "warn"}`}>
+                        {cloudRunStatus?.gcloud?.authenticated ? "gcloud authenticated" : "gcloud login needed"}
+                      </span>
+                      <span className={`chip tone-${cloudRunStatus?.docker?.installed ? "success" : "warn"}`}>
+                        {cloudRunStatus?.docker?.installed ? "docker available" : "docker missing"}
+                      </span>
+                    </div>
+                    <div className="kv-list compact-kv">
+                      <div>
+                        <span>Google account</span>
+                        <strong>{textValue(cloudRunStatus?.gcloud?.active_account, "not authenticated")}</strong>
+                      </div>
+                      <div>
+                        <span>Cloud Run project</span>
+                        <strong>{textValue(cloudRunForm.project, textValue(cloudRunStatus?.defaults?.project, "not set"))}</strong>
+                      </div>
+                    </div>
+                    {!cloudRunStatus?.gcloud?.authenticated ? (
+                      <div className="code-block compact-code-block">
+                        <pre>{textValue(cloudRunStatus?.commands?.login, "gcloud auth login")}</pre>
+                      </div>
+                    ) : null}
+                    <div className="cloud-run-form-grid guide-cloud-run-grid">
+                      <label>
+                        GCP project
+                        <input
+                          value={cloudRunForm.project}
+                          onChange={(event) => updateCloudRunForm("project", event.target.value)}
+                          placeholder="glassy-fort-497911-u3"
+                        />
+                      </label>
+                      <label>
+                        Region
+                        <input
+                          value={cloudRunForm.region}
+                          onChange={(event) => updateCloudRunForm("region", event.target.value)}
+                          placeholder="us-central1"
+                        />
+                      </label>
+                      <label>
+                        Memory
+                        <input
+                          value={cloudRunForm.memory}
+                          onChange={(event) => updateCloudRunForm("memory", event.target.value)}
+                          placeholder="512Mi"
+                        />
+                      </label>
+                      <label>
+                        CPU
+                        <input
+                          value={cloudRunForm.cpu}
+                          onChange={(event) => updateCloudRunForm("cpu", event.target.value)}
+                          placeholder="1"
+                        />
+                      </label>
+                      <label>
+                        Min instances
+                        <input
+                          value={cloudRunForm.min_instances}
+                          onChange={(event) => updateCloudRunForm("min_instances", event.target.value)}
+                          placeholder="0"
+                        />
+                      </label>
+                      <label>
+                        Poll schedule
+                        <input
+                          value={cloudRunForm.poll_schedule}
+                          onChange={(event) => updateCloudRunForm("poll_schedule", event.target.value)}
+                          placeholder="* * * * *"
+                        />
+                      </label>
+                    </div>
+                    <label className="inline-toggle cloud-run-toggle">
+                      <input
+                        type="checkbox"
+                        checked={cloudRunForm.skip_scheduler}
+                        onChange={(event) => updateCloudRunForm("skip_scheduler", event.target.checked)}
+                      />
+                      Skip Cloud Scheduler
+                    </label>
+                    {displayedCloudRunDeployment ? (
+                      <div className="reply compact-reply">
+                        <strong>{displayedCloudRunDeployment.service_name}</strong>
+                        <p>
+                          Status: <code>{displayedCloudRunDeployment.status}</code>
+                          {displayedCloudRunDeployment.result?.service_url ? (
+                            <>
+                              {" "}
+                              URL: <code>{displaySafeUrl(displayedCloudRunDeployment.result.service_url)}</code>
+                            </>
+                          ) : null}
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="actions split-actions">
                   <button onClick={createLocalAgent} disabled={localAgentLoading}>
-                    {localAgentLoading ? "Creating..." : "Create local agent"}
+                    {localAgentLoading
+                      ? "Creating..."
+                      : guideRunTarget === "cloud_run"
+                        ? "Create source agent"
+                        : "Create local agent"}
                   </button>
-                  <button className="secondary" onClick={() => setActiveView("agent")}>
+                  {guideRunTarget === "cloud_run" ? (
+                    <>
+                      <button
+                        className="secondary"
+                        onClick={() => deployCloudRun(true)}
+                        disabled={cloudRunDeploying || !selectedLocalAgent}
+                      >
+                        Dry run Cloud Run
+                      </button>
+                      <button
+                        onClick={() => deployCloudRun(false)}
+                        disabled={cloudRunDeploying || !selectedLocalAgent || !cloudRunStatus?.gcloud?.authenticated}
+                      >
+                        {cloudRunDeploying ? "Starting..." : "Deploy to Cloud Run"}
+                      </button>
+                    </>
+                  ) : null}
+                  <button
+                    className="secondary"
+                    onClick={() => {
+                      if (guideRunTarget === "cloud_run") {
+                        setAgentCardTab("cloud-run");
+                      }
+                      setActiveView("agent");
+                    }}
+                  >
                     Open agent card
                   </button>
                 </div>

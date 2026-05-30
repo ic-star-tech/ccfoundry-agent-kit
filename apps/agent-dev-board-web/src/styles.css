@@ -602,6 +602,62 @@ textarea {
   gap: 16px;
 }
 
+.run-target-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.run-target-button {
+  min-height: 82px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(214, 222, 239, 0.92);
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--ink);
+  box-shadow: none;
+  display: grid;
+  gap: 6px;
+  text-align: left;
+}
+
+.run-target-button span {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.run-target-button.active {
+  border-color: rgba(42, 99, 255, 0.52);
+  background: #f5f8ff;
+  box-shadow: 0 16px 30px rgba(42, 99, 255, 0.12);
+}
+
+.guide-cloud-run-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(42, 99, 255, 0.18);
+  background: rgba(247, 250, 255, 0.94);
+}
+
+.compact-heading {
+  margin-bottom: 0;
+}
+
+.guide-cloud-run-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.compact-code-block {
+  margin: 0;
+}
+
+.compact-reply {
+  margin-top: 0;
+}
+
 .foundry-url-picker {
   display: grid;
   gap: 10px;
@@ -829,7 +885,8 @@ textarea {
   }
 
   .timeline-grid,
-  .runtime-grid {
+  .runtime-grid,
+  .run-target-toggle {
     grid-template-columns: 1fr;
   }
 
