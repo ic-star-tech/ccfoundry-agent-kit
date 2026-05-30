@@ -668,6 +668,21 @@ textarea {
   background: rgba(246, 252, 248, 0.9);
 }
 
+.guide-blocker {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(212, 105, 28, 0.2);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.guide-blocker p {
+  margin: 0;
+  line-height: 1.5;
+}
+
 .compact-heading {
   margin-bottom: 0;
 }

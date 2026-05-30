@@ -1565,6 +1565,26 @@ export default function App() {
   const cloudRunPollObserved = Boolean(textValue(bootstrapState.last_polled_at));
   const deploymentTargetReady = guideRunTarget === "cloud_run" ? cloudRunDeploymentSucceeded : Boolean(selectedLocalAgent);
   const smokeObserved = guideRunTarget === "cloud_run" ? cloudRunDeploymentSucceeded && cloudRunPollObserved : hasConversation;
+  const cloudRunAuthenticated = Boolean(cloudRunStatus?.gcloud?.authenticated);
+  const cloudRunAuthSessionStatus = textValue(cloudRunAuthSession?.status);
+  const cloudRunAuthInProgress = ["starting", "running"].includes(cloudRunAuthSessionStatus);
+  const cloudRunAuthSucceeded = cloudRunAuthSessionStatus === "succeeded";
+  const cloudRunDeployBlockReason = !selectedLocalAgent
+    ? "Create or select an agent source first."
+    : !cloudRunAuthenticated
+      ? "Google Cloud login is required before Cloud Run deployment."
+      : !claimInstalled
+        ? "Foundry claim is not installed yet. Complete GitHub login, then request a bootstrap ticket in step 4."
+        : "";
+  const cloudRunDeployButtonLabel = cloudRunDeploying
+    ? "Starting..."
+    : !selectedLocalAgent
+      ? "Deploy after source"
+      : !cloudRunAuthenticated
+        ? "Deploy after Google login"
+        : !claimInstalled
+          ? "Deploy after Foundry claim"
+          : "Deploy to Cloud Run";
 
   useEffect(() => {
     if (foundryUrl.trim()) {
@@ -2664,9 +2684,13 @@ export default function App() {
                     ) : null}
                     <div className="actions split-actions compact-actions">
                       <button className="secondary" onClick={startCloudRunAuth} disabled={cloudRunAuthLoading}>
-                        {cloudRunAuthLoading ? "Starting login..." : "Google Cloud login"}
+                        {cloudRunAuthLoading
+                          ? "Starting login..."
+                          : cloudRunAuthenticated
+                            ? "Switch Google account"
+                            : "Google Cloud login"}
                       </button>
-                      {cloudRunAuthSession && ["starting", "running"].includes(textValue(cloudRunAuthSession.status)) ? (
+                      {cloudRunAuthSession && cloudRunAuthInProgress ? (
                         <button className="secondary" onClick={cancelCloudRunAuth} disabled={cloudRunAuthLoading}>
                           Cancel login
                         </button>
@@ -2680,7 +2704,9 @@ export default function App() {
                             <strong>{cloudRunAuthSession.status}</strong>
                           </div>
                         </div>
-                        {cloudRunAuthSession.auth_url ? (
+                        {cloudRunAuthSucceeded ? (
+                          <p className="muted">Google Cloud login succeeded. The active account above is ready for deploy.</p>
+                        ) : cloudRunAuthSession.auth_url ? (
                           <a className="secondary link-button" href={cloudRunAuthSession.auth_url} target="_blank" rel="noreferrer">
                             Open Google login
                           </a>
@@ -2689,7 +2715,7 @@ export default function App() {
                             <pre>{(cloudRunAuthSession.logs || []).slice(-4).join("\n") || "Waiting for Google login URL..."}</pre>
                           </div>
                         )}
-                        {["starting", "running"].includes(textValue(cloudRunAuthSession.status)) ? (
+                        {cloudRunAuthInProgress ? (
                           <div className="cloud-run-auth-code-row">
                             <label>
                               Authorization code
@@ -2775,9 +2801,9 @@ export default function App() {
                       </button>
                       <button
                         onClick={() => deployCloudRun(false)}
-                        disabled={cloudRunDeploying || !selectedLocalAgent || !claimInstalled || !cloudRunStatus?.gcloud?.authenticated}
+                        disabled={cloudRunDeploying || Boolean(cloudRunDeployBlockReason)}
                       >
-                        {cloudRunDeploying ? "Starting..." : "Deploy to Cloud Run"}
+                        {cloudRunDeployButtonLabel}
                       </button>
                       {cloudRunCurrentJob && ["queued", "running"].includes(textValue(cloudRunCurrentJob.status)) ? (
                         <button className="secondary" onClick={cancelCloudRunDeployment}>
@@ -2785,6 +2811,12 @@ export default function App() {
                         </button>
                       ) : null}
                     </div>
+                    {cloudRunDeployBlockReason ? (
+                      <div className="guide-blocker">
+                        <strong>Deploy is locked</strong>
+                        <p>{cloudRunDeployBlockReason}</p>
+                      </div>
+                    ) : null}
                     {displayedCloudRunDeployment ? (
                       <div className="reply compact-reply">
                         <strong>{displayedCloudRunDeployment.service_name}</strong>
@@ -2902,12 +2934,18 @@ export default function App() {
                     <button
                       className="secondary"
                       onClick={() => deployCloudRun(false)}
-                      disabled={cloudRunDeploying || !selectedLocalAgent || !claimInstalled || !cloudRunStatus?.gcloud?.authenticated}
+                      disabled={cloudRunDeploying || Boolean(cloudRunDeployBlockReason)}
                     >
-                      {cloudRunDeploying ? "Starting..." : "Deploy to Cloud Run"}
+                      {cloudRunDeployButtonLabel}
                     </button>
                   ) : null}
                 </div>
+                {guideRunTarget === "cloud_run" && cloudRunDeployBlockReason ? (
+                  <div className="guide-blocker">
+                    <strong>Cloud Run deploy needs one more step</strong>
+                    <p>{cloudRunDeployBlockReason}</p>
+                  </div>
+                ) : null}
                 {ticketError ? <div className="error">{ticketError}</div> : null}
               </div>
             </section>
@@ -3421,9 +3459,13 @@ export default function App() {
                   ) : null}
                   <div className="actions split-actions">
                     <button className="secondary" onClick={startCloudRunAuth} disabled={cloudRunAuthLoading}>
-                      {cloudRunAuthLoading ? "Starting login..." : "Google Cloud login"}
+                      {cloudRunAuthLoading
+                        ? "Starting login..."
+                        : cloudRunAuthenticated
+                          ? "Switch Google account"
+                          : "Google Cloud login"}
                     </button>
-                    {cloudRunAuthSession && ["starting", "running"].includes(textValue(cloudRunAuthSession.status)) ? (
+                    {cloudRunAuthSession && cloudRunAuthInProgress ? (
                       <button className="secondary" onClick={cancelCloudRunAuth} disabled={cloudRunAuthLoading}>
                         Cancel login
                       </button>
@@ -3437,7 +3479,9 @@ export default function App() {
                           <strong>{cloudRunAuthSession.status}</strong>
                         </div>
                       </div>
-                      {cloudRunAuthSession.auth_url ? (
+                      {cloudRunAuthSucceeded ? (
+                        <p className="muted">Google Cloud login succeeded. The active account above is ready for deploy.</p>
+                      ) : cloudRunAuthSession.auth_url ? (
                         <a className="link-button" href={cloudRunAuthSession.auth_url} target="_blank" rel="noreferrer">
                           Open Google login
                         </a>
@@ -3446,7 +3490,7 @@ export default function App() {
                           <pre>{(cloudRunAuthSession.logs || []).slice(-4).join("\n") || "Waiting for Google login URL..."}</pre>
                         </div>
                       )}
-                      {["starting", "running"].includes(textValue(cloudRunAuthSession.status)) ? (
+                      {cloudRunAuthInProgress ? (
                         <div className="cloud-run-auth-code-row">
                           <label>
                             Authorization code
@@ -3594,9 +3638,9 @@ export default function App() {
                     </button>
                     <button
                       onClick={() => deployCloudRun(false)}
-                      disabled={cloudRunDeploying || !selectedLocalAgent || !cloudRunStatus?.gcloud?.authenticated}
+                      disabled={cloudRunDeploying || Boolean(cloudRunDeployBlockReason)}
                     >
-                      {cloudRunDeploying ? "Starting..." : "Deploy to Cloud Run"}
+                      {cloudRunDeployButtonLabel}
                     </button>
                     {cloudRunCurrentJob && ["queued", "running"].includes(textValue(cloudRunCurrentJob.status)) ? (
                       <button className="secondary" onClick={cancelCloudRunDeployment}>
@@ -3604,6 +3648,12 @@ export default function App() {
                       </button>
                     ) : null}
                   </div>
+                  {cloudRunDeployBlockReason ? (
+                    <div className="guide-blocker">
+                      <strong>Deploy is locked</strong>
+                      <p>{cloudRunDeployBlockReason}</p>
+                    </div>
+                  ) : null}
                   {cloudRunError ? <div className="error">{cloudRunError}</div> : null}
                 </section>
 
