@@ -29,3 +29,14 @@ examples/me_agent/agent_space/.foundry_bootstrap.*.json
 examples/me_agent/agent_space/reflections/*.jsonl
 examples/me_agent/workspace/*
 !examples/me_agent/workspace/.gitkeep
+
+# Agent Dev Board runtime data (created by running agents locally)
+apps/agent-dev-board-api/agents/
+apps/agent-dev-board-api/local_agents.json
+
+# Temporary patch/debug scripts
+patch_*.py
+fix_*.py
+demo_*.py
+query_*.py
+agent_discovery_orig.py

@@ -9,13 +9,24 @@ from .bootstrap import (
     FoundryInvitePayload,
 )
 from .client import AgentClient
+from .mandate_signing import (
+    create_cart_mandate,
+    create_intent_mandate,
+    create_settlement_mandate,
+    sign_mandate,
+    verify_mandate,
+)
 from .models import (
     AgentManifest,
     ChatRequest,
     ChatResponse,
     ContextMode,
+    FoundryMandate,
     FoundryManifest,
     HealthResponse,
+    MandateItem,
+    SettlementNotification,
+    SettlementRecord,
     SlashCommand,
 )
 from .pull_runtime import FoundryPullRuntime
@@ -35,16 +46,25 @@ __all__ = [
     "FoundryBootstrapConfig",
     "FoundryBootstrapState",
     "FoundryDeveloperClaimPayload",
+    "FoundryMandate",
     "FoundryManifest",
     "FoundryInvitePayload",
     "FoundryPullRuntime",
     "FoundrySandboxClient",
     "FoundrySandboxClientError",
     "HealthResponse",
+    "MandateItem",
+    "SettlementNotification",
+    "SettlementRecord",
     "SlashCommand",
     "TaskTracker",
     "compute_skills_hash",
     "create_agent_app",
+    "create_cart_mandate",
+    "create_intent_mandate",
+    "create_settlement_mandate",
     "scan_loaded_skills",
     "scan_slash_commands",
+    "sign_mandate",
+    "verify_mandate",
 ]

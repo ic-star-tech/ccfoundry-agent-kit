@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from ccfoundry_agent_kit import AgentClient, ChatRequest, ContextMode
 from agent_dev_board_api.local_agents import LocalAgentManager
+from agent_dev_board_api.skill_store import SkillStore
 
 
 APP_DIR = Path(__file__).resolve().parents[2]
@@ -27,6 +28,7 @@ RUNTIME_DIR = AGENTS_FILE.parent
 VENV_PYTHON = Path(os.getenv("CCFOUNDRY_DEV_VENV_PYTHON", str(REPO_ROOT / ".venv" / "bin" / "python"))).expanduser()
 TRANSCRIPTS: dict[str, list[dict[str, str]]] = {}
 logger = logging.getLogger(__name__)
+SKILL_STORE = SkillStore()
 
 
 class LiteAgentConfig(BaseModel):
@@ -550,6 +552,80 @@ async def stop_local_agent(agent_name: str) -> LocalAgentRuntime:
     return LocalAgentRuntime.model_validate(item)
 
 
+# ---------------------------------------------------------------------------
+# Skill Store endpoints
+# ---------------------------------------------------------------------------
+
+
+class InstallSkillRequest(BaseModel):
+    skill_id: str
+
+
+@app.get("/api/skill-store")
+async def list_skill_store(
+    category: str = "",
+    tag: str = "",
+) -> list[dict[str, Any]]:
+    """Browse all available skills in the store."""
+    return SKILL_STORE.list_store(category=category, tag=tag)
+
+
+@app.get("/api/skill-store/{skill_id}")
+async def get_store_skill(skill_id: str) -> dict[str, Any]:
+    """Get full details for a store skill (including SKILL.md content)."""
+    skill = SKILL_STORE.get_skill(skill_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail="Skill not found in store")
+    return skill
+
+
+@app.get("/api/local-agents/{agent_name}/skills")
+async def list_agent_skills(agent_name: str) -> list[dict[str, Any]]:
+    """List skills installed in a local agent."""
+    try:
+        _, item = LOCAL_AGENT_MANAGER._find_agent(agent_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Agent not found") from exc
+    instance_dir = Path(item.get("instance_dir", ""))
+    if not instance_dir.exists():
+        raise HTTPException(status_code=404, detail="Agent instance directory not found")
+    return SKILL_STORE.list_agent_skills(instance_dir)
+
+
+@app.post("/api/local-agents/{agent_name}/skills/install")
+async def install_agent_skill(agent_name: str, request: InstallSkillRequest) -> dict[str, Any]:
+    """Install a skill from the store into a local agent."""
+    try:
+        _, item = LOCAL_AGENT_MANAGER._find_agent(agent_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Agent not found") from exc
+    instance_dir = Path(item.get("instance_dir", ""))
+    if not instance_dir.exists():
+        raise HTTPException(status_code=404, detail="Agent instance directory not found")
+    try:
+        result = SKILL_STORE.install_skill(instance_dir, request.skill_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@app.delete("/api/local-agents/{agent_name}/skills/{skill_id}")
+async def uninstall_agent_skill(agent_name: str, skill_id: str) -> dict[str, Any]:
+    """Remove a skill from a local agent."""
+    try:
+        _, item = LOCAL_AGENT_MANAGER._find_agent(agent_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Agent not found") from exc
+    instance_dir = Path(item.get("instance_dir", ""))
+    if not instance_dir.exists():
+        raise HTTPException(status_code=404, detail="Agent instance directory not found")
+    try:
+        result = SKILL_STORE.uninstall_skill(instance_dir, skill_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
 @app.get("/api/agents")
 async def list_agents() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
@@ -957,3 +1033,288 @@ async def chat_sync(request: LiteChatRequest) -> LiteChatResponse:
         transcript=history,
         metadata=response.metadata,
     )
+
+
+# ---------------------------------------------------------------------------
+# Job Board – browse Foundry requirements / bounties
+# ---------------------------------------------------------------------------
+
+class FoundryJobsRequest(BaseModel):
+    foundry_url: str = ""
+    github_token: str = ""
+    foundry_token: str = ""
+
+
+class FoundryJobClaimRequest(BaseModel):
+    foundry_url: str = ""
+    agent_name: str = ""
+    github_token: str = ""
+    foundry_token: str = ""
+
+
+@app.post("/api/foundry/jobs")
+async def list_foundry_jobs(request: FoundryJobsRequest) -> dict[str, Any]:
+    """Proxy to fetch open requirements/bounties from a Foundry instance."""
+    normalized_foundry_url = _normalize_url(request.foundry_url)
+    if not normalized_foundry_url:
+        raise HTTPException(status_code=400, detail="Foundry URL is required")
+
+    github_token, _token_source = _discover_github_token(request.github_token)
+    auth_token = request.foundry_token.strip() if request.foundry_token.strip() else github_token
+    headers: dict[str, str] = {
+        "Accept": "application/json",
+        "User-Agent": "ccfoundry-agent-kit-dev-board",
+    }
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+    if github_token and not request.foundry_token.strip():
+        headers["X-GitHub-Token"] = github_token
+
+    jobs: list[dict[str, Any]] = []
+    error_message = ""
+    tried_routes: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+        for route_path in (
+            "/api/public/open-requirements",
+            "/api/system/onboarding-requirements",
+            "/api/system/discovery-policies",
+        ):
+            url = f"{normalized_foundry_url}{route_path}"
+            try:
+                response = await client.get(url, headers=headers)
+            except Exception as exc:
+                tried_routes.append({"url": url, "ok": False, "error": str(exc)})
+                continue
+            tried_routes.append({
+                "url": url,
+                "ok": response.is_success,
+                "status_code": response.status_code,
+            })
+            if response.status_code in {404, 405}:
+                continue
+            if response.status_code == 429:
+                error_message = "Rate limited by Foundry – try again shortly"
+                continue
+            if not response.is_success:
+                error_message = f"Foundry returned status {response.status_code}"
+                continue
+            raw = response.json()
+            if isinstance(raw, list):
+                jobs = raw
+            elif isinstance(raw, dict):
+                jobs = raw.get("policies") or raw.get("items") or raw.get("requirements") or []
+                if not isinstance(jobs, list):
+                    jobs = [raw] if raw.get("id") else []
+            break
+
+    return {
+        "ok": len(jobs) > 0 or not error_message,
+        "foundry_url": normalized_foundry_url,
+        "jobs": jobs,
+        "count": len(jobs),
+        "tried_routes": tried_routes,
+        "error": error_message,
+    }
+
+
+@app.post("/api/foundry/jobs/{job_id}/claim")
+async def claim_foundry_job(job_id: str, request: FoundryJobClaimRequest) -> dict[str, Any]:
+    """Send a claim/bid for a specific bounty to Foundry on behalf of an agent."""
+    normalized_foundry_url = _normalize_url(request.foundry_url)
+    if not normalized_foundry_url:
+        raise HTTPException(status_code=400, detail="Foundry URL is required")
+
+    agents = _load_agents()
+    agent = agents.get(request.agent_name)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    github_token, _token_source = _discover_github_token(request.github_token)
+    auth_token = request.foundry_token.strip() if request.foundry_token.strip() else github_token
+    headers: dict[str, str] = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "ccfoundry-agent-kit-dev-board",
+    }
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+    if github_token and not request.foundry_token.strip():
+        headers["X-GitHub-Token"] = github_token
+
+    claim_payload = {
+        "policy_id": job_id,
+        "agent_name": agent.name,
+        "agent_label": agent.label,
+        "agent_base_url": agent.base_url,
+        "claim_message": f"Agent '{agent.label}' is ready to work on this requirement.",
+    }
+
+    claim_result: dict[str, Any] | None = None
+    error_message = ""
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+        for route_path in (
+            f"/api/system/discovery-policies/{job_id}/claim",
+            f"/api/registry/discover",
+        ):
+            url = f"{normalized_foundry_url}{route_path}"
+            try:
+                response = await client.post(url, headers=headers, json=claim_payload)
+            except Exception as exc:
+                error_message = str(exc)
+                continue
+            if response.status_code in {404, 405}:
+                continue
+            if not response.is_success:
+                error_message = f"Foundry returned status {response.status_code}"
+                try:
+                    error_detail = response.json()
+                    error_message += f": {error_detail}"
+                except Exception:
+                    pass
+                continue
+            claim_result = response.json() if isinstance(response.json(), dict) else {"ok": True}
+            break
+
+    if not claim_result:
+        return {
+            "ok": False,
+            "job_id": job_id,
+            "agent_name": agent.name,
+            "error": error_message or "No supported claim endpoint found.",
+        }
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "agent_name": agent.name,
+        "claim_result": claim_result,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Bounty Orchestration – proxy to agent bounty endpoints
+# ---------------------------------------------------------------------------
+
+class BountyScanRequest(BaseModel):
+    foundry_url: str = ""
+    agent_url: str = ""   # e.g. http://127.0.0.1:8088
+
+class BountyExecuteRequest(BaseModel):
+    foundry_url: str = ""
+    agent_url: str = ""
+    job_id: str = ""
+    job_name: str = ""
+    dry_run: bool = False
+
+
+@app.post("/api/bounty/scan")
+async def proxy_bounty_scan(request: BountyScanRequest) -> dict[str, Any]:
+    """Proxy: ask an agent to scan Foundry for matching jobs."""
+    agent_url = request.agent_url.rstrip("/")
+    if not agent_url:
+        raise HTTPException(status_code=400, detail="agent_url is required")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{agent_url}/bounty/scan",
+                json={"foundry_url": request.foundry_url},
+            )
+            return resp.json()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/api/bounty/execute")
+async def proxy_bounty_execute(request: BountyExecuteRequest) -> dict[str, Any]:
+    """Proxy: ask an agent to execute a bounty task."""
+    agent_url = request.agent_url.rstrip("/")
+    if not agent_url:
+        raise HTTPException(status_code=400, detail="agent_url is required")
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{agent_url}/bounty/execute",
+                json={
+                    "foundry_url": request.foundry_url,
+                    "job_id": request.job_id,
+                    "job_name": request.job_name,
+                    "dry_run": request.dry_run,
+                },
+            )
+            return resp.json()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Settlement / Earnings proxy
+# ---------------------------------------------------------------------------
+
+class SettlementsRequest(BaseModel):
+    foundry_url: str = ""
+    agent_name: str = ""
+    limit: int = 50
+
+
+@app.post("/api/settlements")
+async def proxy_settlements(request: SettlementsRequest) -> dict[str, Any]:
+    """Proxy: fetch settlement records from Foundry for an agent."""
+    foundry_url = _normalize_url(request.foundry_url)
+    foundry_agent_name = ""
+
+    # Try to resolve Foundry-registered agent name from bootstrap file
+    if request.agent_name:
+        bootstrap_path = (
+            Path(__file__).resolve().parents[2]
+            / "agents"
+            / request.agent_name
+            / ".foundry_bootstrap.json"
+        )
+        if bootstrap_path.exists():
+            try:
+                bs = json.loads(bootstrap_path.read_text(encoding="utf-8"))
+                foundry_agent_name = str(bs.get("registered_agent_name") or "").strip()
+                if not foundry_url:
+                    foundry_url = _normalize_url(str(bs.get("foundry_base_url") or ""))
+            except Exception:
+                pass
+
+    if not foundry_url:
+        return {"settlements": [], "count": 0, "error": "No foundry_url provided"}
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{foundry_url}/api/public/settlements",
+                params={"limit": request.limit},
+            )
+            if resp.status_code != 200:
+                return {
+                    "settlements": [],
+                    "count": 0,
+                    "error": f"Foundry returned {resp.status_code}: {resp.text[:200]}",
+                }
+            data = resp.json()
+            all_settlements = data.get("settlements", [])
+
+            # Build set of names to match: local name + Foundry-registered name
+            match_names: set[str] = set()
+            if request.agent_name:
+                match_names.add(request.agent_name.lower())
+            if foundry_agent_name:
+                match_names.add(foundry_agent_name.lower())
+
+            if match_names:
+                filtered = [
+                    s for s in all_settlements
+                    if str(s.get("agent_name") or "").lower() in match_names
+                ]
+                # If no matches found with exact name, show all settlements (for demo convenience)
+                if not filtered:
+                    filtered = all_settlements
+            else:
+                filtered = all_settlements
+
+            return {"settlements": filtered, "count": len(filtered)}
+    except Exception as exc:
+        return {"settlements": [], "count": 0, "error": str(exc)}

@@ -1,0 +1,9 @@
+{
+  "id": "ip_reference",
+  "name": "IP Reference Portfolio",
+  "version": "1.0.0",
+  "category": "hardware",
+  "author": "ccfoundry",
+  "tags": ["verilog", "IP", "RTL", "FIFO", "RRA", "counter", "CDC", "portfolio"],
+  "description": "Browse the IP portfolio with reference implementations of common digital modules (RRA, FIFO, edge detector, priority encoder, etc.)."
+}

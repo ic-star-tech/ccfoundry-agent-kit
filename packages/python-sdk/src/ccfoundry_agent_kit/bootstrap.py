@@ -131,6 +131,7 @@ class FoundryBootstrapState(BaseModel):
     developer_identity: dict[str, Any] = Field(default_factory=dict)
     allocated_resources: dict[str, Any] = Field(default_factory=dict)
     env_vars: dict[str, Any] = Field(default_factory=dict)
+    settlements: list[dict[str, Any]] = Field(default_factory=list)
     last_error: str | None = None
 
 
@@ -403,6 +404,72 @@ class FoundryBootstrap:
                 continue
             if action_type in {"approved", "approval", "bootstrap_approved"}:
                 await self.handle_approval(FoundryApprovalPayload.model_validate(action_payload))
+                continue
+            if action_type in {"task_settled", "settlement"}:
+                await self._handle_settlement(action_payload)
+                continue
+
+    async def _handle_settlement(self, payload: dict[str, Any]) -> None:
+        """Process a ``task_settled`` bootstrap action from Foundry.
+
+        Verifies the mandate signature using the local ``AGENT_SECRET``
+        and logs the result.  AP2 equivalent: receiving a signed
+        ``PaymentMandate`` from the commerce platform.
+        """
+        from .mandate_signing import verify_mandate
+
+        mandate_data = payload.get("mandate") or payload
+        signature = str(mandate_data.get("signature") or "")
+        agent_secret = os.environ.get("AGENT_SECRET", "")
+        task_ref = str(mandate_data.get("task_ref") or payload.get("task_ref") or "unknown")
+        amount = mandate_data.get("amount", 0.0)
+        currency = str(mandate_data.get("currency") or "USD")
+
+        if agent_secret and signature:
+            is_valid = verify_mandate(mandate_data, signature, agent_secret)
+        else:
+            is_valid = False
+            logger.warning(
+                "Settlement for task %s: cannot verify signature "
+                "(missing AGENT_SECRET or signature)",
+                task_ref,
+            )
+
+        if is_valid:
+            logger.info(
+                "💰 Settlement VERIFIED for task %s: %s %.2f (agent=%s)",
+                task_ref,
+                currency,
+                amount,
+                mandate_data.get("agent_name", ""),
+            )
+        else:
+            logger.warning(
+                "⚠️ Settlement UNVERIFIED for task %s: %s %.2f — "
+                "signature mismatch or missing secret",
+                task_ref,
+                currency,
+                amount,
+            )
+
+        # Store settlement in local state for audit trail
+        settlement_record = {
+            "task_ref": task_ref,
+            "amount": amount,
+            "currency": currency,
+            "mandate_id": str(mandate_data.get("mandate_id") or ""),
+            "verified": is_valid,
+            "received_at": _utcnow_iso(),
+            "stripe_payment_intent_id": str(
+                payload.get("stripe_payment_intent_id")
+                or mandate_data.get("stripe_payment_intent_id")
+                or ""
+            ),
+        }
+        if not hasattr(self.state, "settlements"):
+            self.state.settlements = []  # type: ignore[attr-defined]
+        self.state.settlements.append(settlement_record)  # type: ignore[attr-defined]
+        self._save_state()
 
     async def _poll_bootstrap_actions(self) -> None:
         if not self.state.discovery_id:

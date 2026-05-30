@@ -96,7 +96,15 @@ class LocalAgentManager:
                 "agent_space_dir": self.repo_root / "examples" / "me_agent" / "agent_space",
                 "app_dir": self.repo_root / "examples" / "me_agent" / "src",
                 "app_module": "me_agent_example.app:app",
-            }
+            },
+            "verilog_module_writer": {
+                "id": "verilog_module_writer",
+                "label": "Verilog Module Writer",
+                "description": "Specialized Verilog/RTL design agent with IP portfolio, coding style guidelines, and sandbox integration for iverilog compilation and simulation.",
+                "agent_space_dir": self.repo_root / "examples" / "verilog_module_writer" / "agent_space",
+                "app_dir": self.repo_root / "examples" / "me_agent" / "src",
+                "app_module": "me_agent_example.app:app",
+            },
         }
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.instances_dir.mkdir(parents=True, exist_ok=True)

@@ -120,3 +120,100 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     agent: str
     version: str
+
+
+# ---------------------------------------------------------------------------
+# AP2-inspired payment models
+# ---------------------------------------------------------------------------
+# Maps AP2's three-layer mandate chain to the Foundry agent labor market:
+#   IntentMandate  ≈  Match Policy's payment_terms + budget_contract
+#   CartMandate    ≈  Agent's budget_contract (from discovery x_foundry)
+#   PaymentMandate ≈  SettlementMandate (Foundry confirms payment)
+#
+# See: https://ap2-protocol.org/overview/
+# See: mandate_signing.py for HMAC signature creation/verification
+# ---------------------------------------------------------------------------
+
+
+class MandateItem(BaseModel):
+    """A single line item in a settlement, modeled after AP2 ``PaymentItem``.
+
+    Examples::
+
+        MandateItem(label="llm_tokens", amount=0.08, currency="USD")
+        MandateItem(label="sandbox_compute", amount=0.05, currency="USD")
+        MandateItem(label="task_reward", amount=10.0, currency="USD")
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    label: str
+    amount: float = 0.0
+    currency: str = "USD"
+    pending: bool = False
+
+
+class FoundryMandate(BaseModel):
+    """AP2-inspired payment mandate for Foundry agent settlements.
+
+    Covers all three mandate types in a single envelope:
+
+    * ``intent``     – Foundry Admin's task brief with budget ceiling
+    * ``cart``       – Agent's quote / bid with fee breakdown
+    * ``settlement`` – Signed proof of verified payment
+
+    The ``signature`` field contains an HMAC-SHA256 digest computed over
+    all other fields using the shared ``AGENT_SECRET``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    mandate_id: str = ""
+    mandate_type: str = "settlement"  # intent | cart | settlement
+    data_key: str = ""
+    task_ref: str = ""
+    agent_name: str = ""
+    amount: float = 0.0
+    currency: str = "USD"
+    items: list[MandateItem] = Field(default_factory=list)
+    payer_identity: str = ""
+    payee_identity: str = ""
+    signature: str = ""
+    signed_at: str = ""
+    verified: bool = False
+
+
+class SettlementRecord(BaseModel):
+    """Server-side settlement record stored in ``agent_usage_ledger``.
+
+    Created by Foundry after the ops agent verifies task completion.
+    The ``mandate`` field contains the full signed ``FoundryMandate``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    agent_name: str = ""
+    task_ref: str = ""
+    settled_amount: float = 0.0
+    currency: str = "USD"
+    mandate: FoundryMandate = Field(default_factory=FoundryMandate)
+    stripe_payment_intent_id: str = ""
+    stripe_transfer_id: str = ""
+    status: str = "settled"  # pending | settled | failed | refunded
+    settled_at: str = ""
+
+
+class SettlementNotification(BaseModel):
+    """Payload delivered to an agent via ``bootstrap_actions`` when a
+    settlement is completed.
+
+    The agent should verify ``mandate.signature`` using its local
+    ``AGENT_SECRET`` before trusting the settlement.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    action_type: str = "task_settled"
+    mandate: FoundryMandate = Field(default_factory=FoundryMandate)
+    settlement: SettlementRecord = Field(default_factory=SettlementRecord)
+    message: str = ""

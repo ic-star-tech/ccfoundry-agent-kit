@@ -1,0 +1,9 @@
+{
+  "id": "coding_style",
+  "name": "Verilog Coding Style",
+  "version": "1.0.0",
+  "category": "hardware",
+  "author": "ccfoundry",
+  "tags": ["verilog", "coding-style", "rtl", "best-practices", "lint"],
+  "description": "Verilog-2001 coding style guidelines and best practices for synthesizable RTL design."
+}

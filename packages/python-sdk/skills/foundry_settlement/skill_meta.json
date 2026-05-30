@@ -1,0 +1,9 @@
+{
+  "id": "foundry_settlement",
+  "name": "Foundry Settlement",
+  "version": "1.0.0",
+  "category": "payment",
+  "author": "ccfoundry",
+  "tags": ["settlement", "payment", "stripe", "bounty"],
+  "description": "Handle task settlement and Stripe payments for completed bounty work."
+}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 type ContextMode = "direct" | "inline";
-type BoardView = "guide" | "agent" | "playground";
+type BoardView = "guide" | "agent" | "playground" | "earnings" | "skills" | "jobs";
 type AgentCardTab = "overview" | "runtimes" | "runtime" | "profile";
 
 type AgentManifest = {
@@ -181,6 +181,9 @@ const NAV_ITEMS: Array<{ id: BoardView; label: string; kicker: string }> = [
   { id: "guide", label: "Guided setup", kicker: "Create, onboard, and test end-to-end" },
   { id: "agent", label: "Agent card", kicker: "Runtime, model, and local agent management" },
   { id: "playground", label: "Agent playground", kicker: "Chat, transcript, and smoke tests" },
+  { id: "earnings", label: "Earnings", kicker: "Settlements, payments, and Stripe transfers" },
+  { id: "skills", label: "Skill Store", kicker: "Browse, install, and manage agent skills" },
+  { id: "jobs", label: "Job Board", kicker: "Discover Foundry bounties and claim work" },
 ];
 
 const AGENT_CARD_TABS: Array<{ id: AgentCardTab; label: string; helper: string }> = [
@@ -329,6 +332,977 @@ function statusTone(status: string): "neutral" | "success" | "warn" {
   return "neutral";
 }
 
+// ---------------------------------------------------------------------------
+// Skill Store Panel component
+// ---------------------------------------------------------------------------
+
+type StoreSkill = {
+  id: string;
+  name: string;
+  category: string;
+  tags: string[];
+  description: string;
+  author: string;
+  version: string;
+};
+
+type InstalledSkill = {
+  id: string;
+  name: string;
+  description: string;
+  has_slash_command: boolean;
+  from_store?: boolean;
+  store_version?: string;
+};
+
+function SkillStorePanel({
+  apiBase,
+  localAgents,
+  selectedAgentName,
+}: {
+  apiBase: string;
+  localAgents: Array<{ name: string; label: string; status?: string }>;
+  selectedAgentName: string;
+}) {
+  const [storeSkills, setStoreSkills] = useState<StoreSkill[]>([]);
+  const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [targetAgent, setTargetAgent] = useState(selectedAgentName || "");
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+
+  const categories = useMemo(() => {
+    const cats = new Set<string>();
+    storeSkills.forEach((s) => { if (s.category) cats.add(s.category); });
+    return ["all", ...Array.from(cats).sort()];
+  }, [storeSkills]);
+
+  const filteredSkills = useMemo(() => {
+    if (selectedCategory === "all") return storeSkills;
+    return storeSkills.filter((s) => s.category === selectedCategory);
+  }, [storeSkills, selectedCategory]);
+
+  const installedIds = useMemo(
+    () => new Set(installedSkills.map((s) => s.id)),
+    [installedSkills],
+  );
+
+  useEffect(() => {
+    void loadStore();
+  }, []);
+
+  useEffect(() => {
+    if (targetAgent) void loadAgentSkills(targetAgent);
+  }, [targetAgent]);
+
+  useEffect(() => {
+    if (selectedAgentName && !targetAgent) setTargetAgent(selectedAgentName);
+  }, [selectedAgentName]);
+
+  async function loadStore() {
+    setLoading(true);
+    setError("");
+    try {
+      const resp = await fetch(`${apiBase}/api/skill-store`);
+      if (!resp.ok) throw new Error(`Store fetch failed: ${resp.status}`);
+      const data = await resp.json();
+      setStoreSkills(Array.isArray(data) ? data : []);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to load store");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadAgentSkills(agentName: string) {
+    if (!agentName) { setInstalledSkills([]); return; }
+    try {
+      const resp = await fetch(`${apiBase}/api/local-agents/${encodeURIComponent(agentName)}/skills`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setInstalledSkills(Array.isArray(data) ? data : []);
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function installSkill(skillId: string) {
+    if (!targetAgent) { setMessage("⚠️ Select an agent first"); return; }
+    setInstalling(skillId);
+    setMessage("");
+    try {
+      const resp = await fetch(`${apiBase}/api/local-agents/${encodeURIComponent(targetAgent)}/skills/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skill_id: skillId }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: "Install failed" }));
+        throw new Error(err.detail || "Install failed");
+      }
+      setMessage(`✅ Installed "${skillId}" on ${targetAgent}`);
+      void loadAgentSkills(targetAgent);
+    } catch (e: unknown) {
+      setMessage(`❌ ${e instanceof Error ? e.message : "Install failed"}`);
+    } finally {
+      setInstalling(null);
+    }
+  }
+
+  async function uninstallSkill(skillId: string) {
+    if (!targetAgent) return;
+    setInstalling(skillId);
+    setMessage("");
+    try {
+      const resp = await fetch(
+        `${apiBase}/api/local-agents/${encodeURIComponent(targetAgent)}/skills/${encodeURIComponent(skillId)}`,
+        { method: "DELETE" },
+      );
+      if (!resp.ok) throw new Error("Uninstall failed");
+      setMessage(`🗑️ Removed "${skillId}" from ${targetAgent}`);
+      void loadAgentSkills(targetAgent);
+    } catch (e: unknown) {
+      setMessage(`❌ ${e instanceof Error ? e.message : "Uninstall failed"}`);
+    } finally {
+      setInstalling(null);
+    }
+  }
+
+  const categoryIcons: Record<string, string> = {
+    hardware: "🔧",
+    infrastructure: "🏗️",
+    payment: "💳",
+    core: "🧠",
+  };
+
+  return (
+    <>
+      <div className="card-header">
+        <div>
+          <p className="eyebrow">Skills</p>
+          <h2>Skill Store</h2>
+        </div>
+      </div>
+
+      {/* Agent selector + status */}
+      <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: ".5rem" }}>
+          <span style={{ fontSize: ".85rem", opacity: .7 }}>Install to:</span>
+          <select
+            value={targetAgent}
+            onChange={(e) => setTargetAgent(e.target.value)}
+            style={{ padding: ".3rem .5rem", borderRadius: "6px", background: "var(--surface)", border: "1px solid var(--border)", color: "inherit" }}
+          >
+            <option value="">— select agent —</option>
+            {localAgents.map((a) => (
+              <option key={a.name} value={a.name}>{a.label || a.name} ({a.status})</option>
+            ))}
+          </select>
+        </label>
+
+        {/* Category filter */}
+        <div style={{ display: "flex", gap: ".3rem", flexWrap: "wrap" }}>
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              className={`chip ${selectedCategory === cat ? "active" : ""}`}
+              onClick={() => setSelectedCategory(cat)}
+              style={{
+                cursor: "pointer",
+                background: selectedCategory === cat ? "var(--accent)" : "var(--surface)",
+                color: selectedCategory === cat ? "#fff" : "inherit",
+                border: "1px solid var(--border)",
+                borderRadius: "999px",
+                padding: ".2rem .6rem",
+                fontSize: ".8rem",
+                transition: "all .2s",
+              }}
+            >
+              {categoryIcons[cat] || "📦"} {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {message ? (
+        <div style={{ padding: ".5rem .75rem", borderRadius: "8px", background: "var(--surface)", marginBottom: "1rem", fontSize: ".85rem" }}>
+          {message}
+        </div>
+      ) : null}
+
+      {error ? (
+        <div style={{ color: "var(--danger)", marginBottom: "1rem" }}>{error}</div>
+      ) : null}
+
+      {loading ? <p className="muted">Loading skill store…</p> : null}
+
+      {/* Installed skills summary */}
+      {targetAgent && installedSkills.length > 0 ? (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <h3 style={{ fontSize: ".9rem", opacity: .7, marginBottom: ".5rem" }}>
+            Installed on <strong>{targetAgent}</strong> ({installedSkills.length})
+          </h3>
+          <div style={{ display: "flex", gap: ".4rem", flexWrap: "wrap" }}>
+            {installedSkills.map((s) => (
+              <span key={s.id} className="chip" style={{ display: "inline-flex", alignItems: "center", gap: ".3rem" }}>
+                {s.name || s.id}
+                <button
+                  onClick={() => uninstallSkill(s.id)}
+                  disabled={installing === s.id}
+                  style={{
+                    background: "none", border: "none", color: "var(--danger)", cursor: "pointer",
+                    fontSize: ".75rem", padding: "0 2px", opacity: installing === s.id ? .3 : .7,
+                  }}
+                  title={`Uninstall ${s.id}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {/* No agent banner */}
+      {!targetAgent && storeSkills.length > 0 ? (
+        <div style={{
+          padding: ".75rem 1rem",
+          borderRadius: "10px",
+          background: "linear-gradient(135deg, rgba(255,180,0,.12), rgba(255,120,0,.08))",
+          border: "1px solid rgba(255,180,0,.25)",
+          marginBottom: "1rem",
+          fontSize: ".85rem",
+          display: "flex",
+          alignItems: "center",
+          gap: ".5rem",
+        }}>
+          <span style={{ fontSize: "1.2rem" }}>☝️</span>
+          <span>Select an agent above to install skills. Or <strong>create one</strong> from the Agent card tab first.</span>
+        </div>
+      ) : null}
+
+      {/* Store skills grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "1rem" }}>
+        {filteredSkills.map((skill) => {
+          const isInstalled = installedIds.has(skill.id);
+          return (
+            <article
+              key={skill.id}
+              style={{
+                border: isInstalled ? "1px solid var(--accent)" : "1px solid var(--border)",
+                borderRadius: "12px",
+                padding: "1.25rem",
+                background: isInstalled ? "rgba(46, 196, 182, 0.08)" : "var(--surface)",
+                transition: "transform .15s, box-shadow .15s",
+                position: "relative",
+                display: "flex",
+                flexDirection: "column",
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.transform = "translateY(-2px)"; (e.currentTarget as HTMLElement).style.boxShadow = "0 4px 16px rgba(0,0,0,.2)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.transform = ""; (e.currentTarget as HTMLElement).style.boxShadow = ""; }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: ".5rem" }}>
+                <div>
+                  <h4 style={{ margin: 0, fontSize: "1.05rem" }}>
+                    {categoryIcons[skill.category] || "📦"} {skill.name}
+                  </h4>
+                  <span style={{ fontSize: ".75rem", opacity: .5 }}>v{skill.version} · {skill.author}</span>
+                </div>
+                {isInstalled ? (
+                  <span style={{
+                    fontSize: ".7rem", padding: ".2rem .5rem", borderRadius: "6px",
+                    background: "var(--accent)", color: "#fff", fontWeight: 600,
+                  }}>
+                    ✓ installed
+                  </span>
+                ) : null}
+              </div>
+              <p style={{ fontSize: ".85rem", margin: ".5rem 0", opacity: .8, lineHeight: 1.5, flex: 1 }}>
+                {skill.description}
+              </p>
+              <div style={{ display: "flex", gap: ".3rem", flexWrap: "wrap", marginBottom: ".75rem" }}>
+                {skill.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    style={{
+                      fontSize: ".7rem",
+                      padding: ".1rem .45rem",
+                      borderRadius: "999px",
+                      background: "rgba(255,255,255,.06)",
+                      border: "1px solid rgba(255,255,255,.1)",
+                    }}
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+              <button
+                onClick={() => {
+                  if (!targetAgent) {
+                    setMessage("☝️ Please select an agent from the dropdown above first!");
+                    return;
+                  }
+                  isInstalled ? uninstallSkill(skill.id) : installSkill(skill.id);
+                }}
+                disabled={installing === skill.id}
+                style={{
+                  width: "100%",
+                  padding: ".55rem .75rem",
+                  borderRadius: "8px",
+                  border: isInstalled ? "1px solid var(--danger)" : "none",
+                  background: isInstalled
+                    ? "transparent"
+                    : "linear-gradient(135deg, var(--accent), #1a9b8f)",
+                  color: isInstalled ? "var(--danger)" : "#fff",
+                  cursor: installing === skill.id ? "not-allowed" : "pointer",
+                  fontSize: ".9rem",
+                  fontWeight: 600,
+                  opacity: installing === skill.id ? .5 : 1,
+                  transition: "all .2s",
+                  letterSpacing: ".02em",
+                }}
+              >
+                {installing === skill.id
+                  ? "⏳ Working…"
+                  : isInstalled
+                    ? "🗑 Uninstall"
+                    : "⬇ Install"
+                }
+              </button>
+            </article>
+          );
+        })}
+      </div>
+
+      {!loading && filteredSkills.length === 0 ? (
+        <p className="muted">No skills found in this category.</p>
+      ) : null}
+    </>
+  );
+}
+
+
+// ─── Job Board Panel ─────────────────────────────────────────────
+type FoundryJob = {
+  id: string;
+  name?: string;
+  description?: string;
+  label?: string;
+  budget?: { max_cost_per_call_usd?: number; ceiling_usd?: number; amount?: number };
+  tags?: string[];
+  status?: string;
+  created_at?: string;
+  requirements?: Record<string, unknown>;
+  execution_contract?: Record<string, unknown>;
+  resource_requests?: Record<string, unknown>;
+  payment_criteria?: string;
+  payment_terms?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+function JobBoardPanel({
+  apiBase,
+  localAgents,
+  selectedAgentName,
+  foundryUrl: initialFoundryUrl,
+}: {
+  apiBase: string;
+  localAgents: Array<{ name: string; label: string; status?: string; base_url?: string; port?: number }>;
+  selectedAgentName: string;
+  foundryUrl: string;
+}) {
+  const [foundryUrl, setFoundryUrl] = useState(initialFoundryUrl || "https://foundry.cochiper.com");
+  const [foundryToken, setFoundryToken] = useState("");
+  const [jobs, setJobs] = useState<FoundryJob[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [claiming, setClaiming] = useState<string | null>(null);
+  const [claimMessage, setClaimMessage] = useState("");
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [expandedJob, setExpandedJob] = useState<string | null>(null);
+  const [targetAgent, setTargetAgent] = useState(selectedAgentName);
+  const [showAuthSection, setShowAuthSection] = useState(false);
+  const [executing, setExecuting] = useState<string | null>(null);
+  const [execResult, setExecResult] = useState<Record<string, unknown> | null>(null);
+
+  useEffect(() => { setTargetAgent(selectedAgentName); }, [selectedAgentName]);
+
+  const fetchJobs = async () => {
+    if (!foundryUrl.trim()) return;
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${apiBase}/api/foundry/jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ foundry_url: foundryUrl, foundry_token: foundryToken }),
+      });
+      const data = await res.json();
+      if (data.error) setError(data.error);
+      setJobs(Array.isArray(data.jobs) ? data.jobs : []);
+      setLastRefreshed(new Date());
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void fetchJobs(); }, [foundryUrl]);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(fetchJobs, 15000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, foundryUrl]);
+
+  const claimJob = async (jobId: string) => {
+    if (!targetAgent) {
+      setClaimMessage("☝️ Please select an agent first!");
+      return;
+    }
+    setClaiming(jobId);
+    setClaimMessage("");
+    try {
+      const res = await fetch(`${apiBase}/api/foundry/jobs/${jobId}/claim`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          foundry_url: foundryUrl,
+          agent_name: targetAgent,
+          foundry_token: foundryToken,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setClaimMessage(`✅ ${targetAgent} claimed job successfully!`);
+      } else {
+        setClaimMessage(`❌ Claim failed: ${data.error || "Unknown error"}`);
+      }
+    } catch (err) {
+      setClaimMessage(`❌ ${String(err)}`);
+    } finally {
+      setClaiming(null);
+    }
+  };
+
+  const autoExecuteJob = async (job: FoundryJob) => {
+    const agent = localAgents.find(a => a.name === targetAgent) || localAgents[0];
+    if (!agent) { setClaimMessage("No agent selected."); return; }
+    setExecuting(job.id);
+    setExecResult(null);
+    setExpandedJob(job.id);
+    try {
+      const agentUrl = agent.base_url || `http://127.0.0.1:${agent.port || 8088}`;
+      const resp = await fetch(`${API_BASE}/api/bounty/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          foundry_url: foundryUrl,
+          agent_url: agentUrl,
+          job_id: job.id,
+          job_name: getJobTitle(job),
+          dry_run: false,
+        }),
+      });
+      const data = await resp.json();
+      setExecResult(data);
+      if (data.ok) {
+        setClaimMessage(`✅ ${agent.name} completed: ${(data.deliverable?.status || "done")}`);
+      } else {
+        setClaimMessage(`❌ Execution failed: ${data.error || "unknown"}`);
+      }
+    } catch (e: unknown) {
+      setClaimMessage(`❌ Execute error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExecuting(null);
+    }
+  };
+
+  const getBudgetDisplay = (job: FoundryJob): string => {
+    const b = job.budget;
+    // 1. Check structured budget fields
+    const budgetAmt = b ? (b.ceiling_usd ?? b.max_cost_per_call_usd ?? b.amount) : undefined;
+    if (budgetAmt !== undefined && budgetAmt !== null) return `$${Number(budgetAmt).toFixed(2)}`;
+    // 2. Check payment_terms.hard_ceiling_per_call
+    const pt = job.payment_terms as Record<string, unknown> | undefined;
+    const ceiling = pt?.hard_ceiling_per_call;
+    if (ceiling !== undefined && ceiling !== null) return `$${Number(ceiling).toFixed(2)}`;
+    // 3. Parse dollar amounts from payment_criteria text (e.g. "$1 hard ceiling")
+    const pc = job.payment_criteria || "";
+    const match = pc.match(/\$(\d+(?:\.\d+)?)/);
+    if (match) return `$${Number(match[1]).toFixed(2)}`;
+    return "—";
+  };
+
+  const getJobTitle = (job: FoundryJob): string =>
+    job.name || job.label || job.id?.slice(0, 12) || "Untitled";
+
+  const getJobDescription = (job: FoundryJob): string =>
+    job.description
+      || job.payment_criteria
+      || (typeof (job as Record<string, unknown>)["brief"] === "string"
+        ? String((job as Record<string, unknown>)["brief"])
+        : "No description provided.");
+
+  const statusColors: Record<string, string> = {
+    active: "#2ec4b6",
+    open: "#2ec4b6",
+    pending: "#ffb400",
+    closed: "#e63946",
+    fulfilled: "#888",
+  };
+
+  return (
+    <>
+      <p className="eyebrow">Marketplace</p>
+      <h2>🔍 Job Board</h2>
+      <p className="muted" style={{ marginBottom: "1.25rem" }}>
+        Discover open bounties and requirements from a Foundry instance. Your agent can claim work and earn rewards.
+      </p>
+
+      {/* Foundry URL + Controls */}
+      <div style={{ display: "flex", gap: ".5rem", marginBottom: "1rem", flexWrap: "wrap", alignItems: "center" }}>
+        <input
+          type="text"
+          value={foundryUrl}
+          onChange={(e) => setFoundryUrl(e.target.value)}
+          placeholder="https://foundry.cochiper.com"
+          style={{
+            flex: "1 1 300px", padding: ".5rem .75rem", borderRadius: "8px",
+            border: "1px solid var(--border)", background: "var(--surface)",
+            color: "inherit", fontSize: ".9rem",
+          }}
+        />
+        <button
+          onClick={fetchJobs}
+          disabled={loading}
+          style={{
+            padding: ".5rem 1rem", borderRadius: "8px", border: "none",
+            background: "linear-gradient(135deg, var(--accent), #1a9b8f)",
+            color: "#fff", cursor: loading ? "not-allowed" : "pointer",
+            fontSize: ".85rem", fontWeight: 600, opacity: loading ? .6 : 1,
+          }}
+        >
+          {loading ? "⏳ Loading…" : "🔄 Refresh"}
+        </button>
+        <label style={{ display: "flex", alignItems: "center", gap: ".3rem", fontSize: ".8rem", opacity: .8 }}>
+          <input
+            type="checkbox"
+            checked={autoRefresh}
+            onChange={(e) => setAutoRefresh(e.target.checked)}
+            style={{ accentColor: "var(--accent)" }}
+          />
+          Auto (15s)
+        </label>
+      </div>
+
+      {/* Auth section (collapsible) */}
+      <div style={{ marginBottom: "1rem" }}>
+        <button
+          onClick={() => setShowAuthSection(!showAuthSection)}
+          style={{
+            background: "none", border: "none", color: "var(--accent)",
+            cursor: "pointer", fontSize: ".8rem", padding: "0",
+            display: "flex", alignItems: "center", gap: ".3rem",
+          }}
+        >
+          {showAuthSection ? "▼" : "▶"} 🔑 Foundry Authentication
+          {foundryToken ? <span style={{ color: "#2ec4b6" }}> ✓ token set</span> : null}
+        </button>
+        {showAuthSection ? (
+          <div style={{
+            marginTop: ".5rem", padding: ".75rem", borderRadius: "8px",
+            background: "rgba(255,255,255,.03)", border: "1px solid var(--border)",
+          }}>
+            <label style={{ fontSize: ".8rem", opacity: .7, display: "block", marginBottom: ".3rem" }}>
+              Foundry Admin JWT Token (from Foundry login)
+            </label>
+            <input
+              type="password"
+              value={foundryToken}
+              onChange={(e) => setFoundryToken(e.target.value)}
+              placeholder="eyJhbGciOiJIUzI1NiIs..."
+              style={{
+                width: "100%", padding: ".4rem .6rem", borderRadius: "8px",
+                border: "1px solid var(--border)", background: "var(--surface)",
+                color: "inherit", fontSize: ".8rem", fontFamily: "monospace",
+              }}
+            />
+            <p style={{ fontSize: ".7rem", opacity: .5, margin: ".4rem 0 0" }}>
+              Paste the JWT token from your Foundry admin session. Required for listing private bounties.
+              You can get this from the Foundry UI after login → API Token.
+            </p>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Agent selector */}
+      <div style={{ display: "flex", gap: ".5rem", marginBottom: "1rem", alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: ".85rem", opacity: .7 }}>Claim as:</span>
+        <select
+          value={targetAgent}
+          onChange={(e) => setTargetAgent(e.target.value)}
+          style={{
+            padding: ".4rem .6rem", borderRadius: "8px", border: "1px solid var(--border)",
+            background: "var(--surface)", color: "inherit", fontSize: ".85rem",
+          }}
+        >
+          <option value="">— select agent —</option>
+          {localAgents.map((a) => (
+            <option key={a.name} value={a.name}>
+              {a.name} {a.status === "running" ? "🟢" : "⚪"}
+            </option>
+          ))}
+        </select>
+        {lastRefreshed ? (
+          <span style={{ fontSize: ".75rem", opacity: .5, marginLeft: "auto" }}>
+            Last: {lastRefreshed.toLocaleTimeString()}
+            {autoRefresh ? " · auto-refreshing" : ""}
+          </span>
+        ) : null}
+      </div>
+
+      {/* Messages */}
+      {error ? (
+        <div style={{
+          padding: ".75rem 1rem", borderRadius: "10px", marginBottom: "1rem",
+          background: "rgba(230, 57, 70, .1)", border: "1px solid rgba(230, 57, 70, .3)",
+          fontSize: ".85rem",
+        }}>
+          ⚠️ {error}
+        </div>
+      ) : null}
+
+      {claimMessage ? (
+        <div style={{
+          padding: ".75rem 1rem", borderRadius: "10px", marginBottom: "1rem",
+          background: claimMessage.startsWith("✅")
+            ? "rgba(46, 196, 182, .1)"
+            : claimMessage.startsWith("☝")
+              ? "rgba(255, 180, 0, .1)"
+              : "rgba(230, 57, 70, .1)",
+          border: `1px solid ${claimMessage.startsWith("✅") ? "rgba(46, 196, 182, .3)" : claimMessage.startsWith("☝") ? "rgba(255,180,0,.3)" : "rgba(230,57,70,.3)"}`,
+          fontSize: ".85rem",
+        }}>
+          {claimMessage}
+        </div>
+      ) : null}
+
+      {/* Jobs count */}
+      {!loading && jobs.length > 0 ? (
+        <div style={{ display: "flex", alignItems: "center", gap: ".5rem", marginBottom: "1rem" }}>
+          <span style={{
+            display: "inline-block", padding: ".2rem .6rem", borderRadius: "999px",
+            background: "linear-gradient(135deg, var(--accent), #1a9b8f)", color: "#fff",
+            fontSize: ".8rem", fontWeight: 600,
+          }}>
+            {jobs.length}
+          </span>
+          <span style={{ fontSize: ".9rem" }}>
+            open {jobs.length === 1 ? "bounty" : "bounties"} available
+          </span>
+        </div>
+      ) : null}
+
+      {/* Jobs grid */}
+      <div style={{ display: "flex", flexDirection: "column", gap: ".75rem" }}>
+        {jobs.map((job) => {
+          const isExpanded = expandedJob === job.id;
+          const status = String(job.status || "open").toLowerCase();
+          const statusColor = statusColors[status] || "#999";
+          return (
+            <article
+              key={job.id}
+              style={{
+                border: "1px solid var(--border)",
+                borderRadius: "12px",
+                padding: "1.25rem",
+                background: "var(--surface)",
+                transition: "transform .15s, box-shadow .15s, border-color .15s",
+                borderLeft: `4px solid ${statusColor}`,
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.transform = "translateY(-1px)";
+                (e.currentTarget as HTMLElement).style.boxShadow = "0 4px 16px rgba(0,0,0,.2)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.transform = "";
+                (e.currentTarget as HTMLElement).style.boxShadow = "";
+              }}
+              onClick={() => setExpandedJob(isExpanded ? null : job.id)}
+            >
+              {/* Header */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: ".5rem" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: ".5rem", marginBottom: ".25rem" }}>
+                    <h4 style={{ margin: 0, fontSize: "1.05rem" }}>
+                      💼 {getJobTitle(job)}
+                    </h4>
+                    <span style={{
+                      fontSize: ".65rem", padding: ".15rem .45rem", borderRadius: "6px",
+                      background: statusColor, color: "#fff", fontWeight: 600,
+                      textTransform: "uppercase", letterSpacing: ".05em",
+                    }}>
+                      {status}
+                    </span>
+                  </div>
+                  <span style={{ fontSize: ".75rem", opacity: .5 }}>
+                    ID: {job.id?.slice(0, 12)}…
+                    {job.created_at ? ` · Created: ${new Date(job.created_at).toLocaleDateString()}` : ""}
+                  </span>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{
+                    fontSize: "1.3rem", fontWeight: 700,
+                    background: "linear-gradient(135deg, #2ec4b6, #1a9b8f)",
+                    WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+                  }}>
+                    {getBudgetDisplay(job)}
+                  </div>
+                  <span style={{ fontSize: ".7rem", opacity: .5 }}>budget ceiling</span>
+                </div>
+              </div>
+
+              {/* Description */}
+              <p style={{
+                fontSize: ".85rem", margin: ".5rem 0", opacity: .8, lineHeight: 1.5,
+                maxHeight: isExpanded ? "none" : "2.8em",
+                overflow: isExpanded ? "visible" : "hidden",
+              }}>
+                {getJobDescription(job)}
+              </p>
+
+              {/* Tags */}
+              {Array.isArray(job.tags) && job.tags.length > 0 ? (
+                <div style={{ display: "flex", gap: ".3rem", flexWrap: "wrap", marginBottom: ".75rem" }}>
+                  {job.tags.map((tag) => (
+                    <span key={tag} style={{
+                      fontSize: ".7rem", padding: ".1rem .45rem", borderRadius: "999px",
+                      background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.1)",
+                    }}>
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+
+              {/* Payment Criteria (always shown if present) */}
+              {job.payment_criteria ? (
+                <div style={{
+                  margin: ".5rem 0 .75rem", padding: ".6rem .8rem", borderRadius: "8px",
+                  background: "rgba(255, 180, 0, .08)", border: "1px solid rgba(255, 180, 0, .2)",
+                  fontSize: ".82rem", lineHeight: 1.6,
+                }}>
+                  <strong style={{ fontSize: ".7rem", textTransform: "uppercase", letterSpacing: ".04em", opacity: .7 }}>
+                    📋 Requirements & Criteria
+                  </strong>
+                  <div style={{ marginTop: ".3rem", whiteSpace: "pre-wrap" }}>
+                    {job.payment_criteria}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Expanded details */}
+              {isExpanded ? (
+                <div style={{
+                  marginTop: ".75rem", padding: ".75rem", borderRadius: "8px",
+                  background: "rgba(255,255,255,.03)", border: "1px solid var(--border)",
+                  fontSize: ".8rem", lineHeight: 1.6,
+                }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: ".5rem" }}>
+                    {job.execution_contract ? (
+                      <div>
+                        <strong style={{ opacity: .6 }}>Execution Contract</strong>
+                        <pre style={{ margin: ".25rem 0", fontSize: ".7rem", opacity: .7, whiteSpace: "pre-wrap" }}>
+                          {JSON.stringify(job.execution_contract, null, 2)}
+                        </pre>
+                      </div>
+                    ) : null}
+                    {job.resource_requests ? (
+                      <div>
+                        <strong style={{ opacity: .6 }}>Resource Requests</strong>
+                        <pre style={{ margin: ".25rem 0", fontSize: ".7rem", opacity: .7, whiteSpace: "pre-wrap" }}>
+                          {JSON.stringify(job.resource_requests, null, 2)}
+                        </pre>
+                      </div>
+                    ) : null}
+                    {job.requirements && Object.keys(job.requirements).length > 0 ? (
+                      <div style={{ gridColumn: "1 / -1" }}>
+                        <strong style={{ opacity: .6 }}>Requirements</strong>
+                        <pre style={{ margin: ".25rem 0", fontSize: ".7rem", opacity: .7, whiteSpace: "pre-wrap" }}>
+                          {JSON.stringify(job.requirements, null, 2)}
+                        </pre>
+                      </div>
+                    ) : null}
+                    {job.payment_terms && Object.keys(job.payment_terms).length > 0 ? (
+                      <div>
+                        <strong style={{ opacity: .6 }}>Payment Terms</strong>
+                        <pre style={{ margin: ".25rem 0", fontSize: ".7rem", opacity: .7, whiteSpace: "pre-wrap" }}>
+                          {JSON.stringify(job.payment_terms, null, 2)}
+                        </pre>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div style={{ marginTop: ".5rem", opacity: .5, fontSize: ".7rem" }}>
+                    Full ID: {job.id}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Claim + Execute buttons */}
+              <div style={{ display: "flex", gap: ".5rem", marginTop: ".75rem", alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  onClick={(e) => { e.stopPropagation(); void claimJob(job.id); }}
+                  disabled={claiming === job.id || status === "closed" || status === "fulfilled"}
+                  style={{
+                    padding: ".5rem 1.25rem", borderRadius: "8px", border: "none",
+                    background: status === "closed" || status === "fulfilled"
+                      ? "rgba(255,255,255,.08)"
+                      : "linear-gradient(135deg, #ffb400, #ff8c00)",
+                    color: status === "closed" || status === "fulfilled" ? "#666" : "#fff",
+                    cursor: claiming === job.id || status === "closed" ? "not-allowed" : "pointer",
+                    fontSize: ".85rem", fontWeight: 600,
+                    opacity: claiming === job.id ? .5 : 1,
+                    transition: "all .2s",
+                  }}
+                >
+                  {claiming === job.id
+                    ? "⏳ Claiming…"
+                    : status === "fulfilled"
+                      ? "✓ Fulfilled"
+                      : status === "closed"
+                        ? "🚫 Closed"
+                        : "🤚 Claim This Job"
+                  }
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); void autoExecuteJob(job); }}
+                  disabled={executing === job.id || status === "closed" || status === "fulfilled"}
+                  style={{
+                    padding: ".5rem 1.25rem", borderRadius: "8px", border: "none",
+                    background: executing === job.id
+                      ? "linear-gradient(135deg, #9b59b6, #8e44ad)"
+                      : "linear-gradient(135deg, #2ec4b6, #1a9b8f)",
+                    color: "#fff",
+                    cursor: executing === job.id ? "wait" : "pointer",
+                    fontSize: ".85rem", fontWeight: 600,
+                    opacity: executing === job.id ? .7 : 1,
+                    transition: "all .2s",
+                    animation: executing === job.id ? "pulse 1.5s ease-in-out infinite" : "none",
+                  }}
+                >
+                  {executing === job.id ? "⚙️ Executing…" : "🤖 Auto Execute"}
+                </button>
+                <span style={{ fontSize: ".75rem", opacity: .5 }}>
+                  {isExpanded ? "▲ click to collapse" : "▼ click for details"}
+                </span>
+              </div>
+
+              {/* Execution Result */}
+              {execResult && expandedJob === job.id ? (() => {
+                const er = execResult as Record<string, unknown>;
+                const dl = er.deliverable as Record<string, unknown> | undefined;
+                const steps = er.steps as Record<string, unknown>[] | undefined;
+                const statusColor = dl?.status === "verified" ? "#2ec4b6"
+                  : dl?.status === "code_ready" ? "#4ea8de" : "#ffb400";
+                const statusEmoji = dl?.status === "verified" ? "✅"
+                  : dl?.status === "code_ready" ? "📦" : "⚠️";
+                return (
+                <div style={{
+                  marginTop: ".75rem", padding: ".75rem", borderRadius: "8px",
+                  background: er.ok ? "rgba(46, 196, 182, .08)" : "rgba(255, 100, 100, .08)",
+                  border: `1px solid ${er.ok ? "rgba(46,196,182,.3)" : "rgba(255,100,100,.3)"}`,
+                  fontSize: ".82rem", lineHeight: 1.6,
+                }}>
+                  <strong style={{ fontSize: ".7rem", textTransform: "uppercase", letterSpacing: ".04em" }}>
+                    {er.ok ? "✅ Execution Result" : "❌ Execution Failed"}
+                  </strong>
+                  {dl ? (
+                    <div style={{ marginTop: ".4rem" }}>
+                      <div>Module: <strong>{dl.module_name as string}</strong></div>
+                      <div>Status: <strong style={{ color: statusColor }}>
+                        {statusEmoji} {dl.status as string}
+                      </strong></div>
+                      <div>Files: {(dl.files_delivered as string[])?.join(", ")}</div>
+                      {dl.llm_used ? <div style={{ opacity: .7 }}>🧠 LLM generated code</div> : null}
+                    </div>
+                  ) : null}
+                  {Array.isArray(steps) ? (
+                    <div style={{ marginTop: ".5rem" }}>
+                      <strong style={{ fontSize: ".7rem", opacity: .6 }}>Steps:</strong>
+                      {steps.map((step, i) => {
+                        const isSkipped = step.sandbox_skipped as boolean;
+                        const icon = step.step === "simulate" && step.tests_passed
+                          ? "✅" : isSkipped ? "⚠️" : step.error ? "❌" : "▶️";
+                        return (
+                        <div key={i} style={{ marginLeft: ".5rem", fontSize: ".75rem", opacity: .8, marginTop: ".2rem" }}>
+                          {icon} <strong>{step.step as string}</strong>
+                          {step.output
+                            ? <pre style={{ margin: ".2rem 0", fontSize: ".7rem", opacity: .7, whiteSpace: "pre-wrap", maxHeight: "120px", overflow: "auto" }}>
+                                {String(step.output).slice(0, 500)}
+                              </pre>
+                            : null
+                          }
+                          {step.error
+                            ? <span style={{ color: isSkipped ? "#ffb400" : "#ff6464" }}> {String(step.error).slice(0, 200)}</span>
+                            : null
+                          }
+                        </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {dl?.code_preview ? (
+                    <details style={{ marginTop: ".5rem" }}>
+                      <summary style={{ cursor: "pointer", fontSize: ".7rem", fontWeight: 600, opacity: .6 }}>
+                        📄 Code Preview ({Object.keys(dl.code_preview as Record<string, string>).join(", ")})
+                      </summary>
+                      {Object.entries(dl.code_preview as Record<string, string>).map(([fname, code]) => (
+                        <pre key={fname} style={{
+                          margin: ".3rem 0", padding: ".5rem", borderRadius: "6px",
+                          background: "rgba(0,0,0,.15)", fontSize: ".65rem",
+                          whiteSpace: "pre-wrap", maxHeight: "200px", overflow: "auto",
+                        }}>
+                          <strong>// {fname}</strong>{"\n"}{code}
+                        </pre>
+                      ))}
+                    </details>
+                  ) : null}
+                </div>
+                );
+              })() : null}
+            </article>
+          );
+        })}
+      </div>
+
+      {/* Empty state */}
+      {!loading && jobs.length === 0 && !error ? (
+        <div style={{
+          textAlign: "center", padding: "3rem 1rem", opacity: .6,
+        }}>
+          <div style={{ fontSize: "3rem", marginBottom: ".5rem" }}>🔍</div>
+          <p style={{ fontSize: "1rem" }}>No open bounties found on this Foundry.</p>
+          <p style={{ fontSize: ".85rem", opacity: .6 }}>
+            Try a different Foundry URL or check back later.
+          </p>
+        </div>
+      ) : null}
+
+      {loading && jobs.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "2rem", opacity: .5, fontSize: "1rem" }}>
+          ⏳ Searching for bounties…
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+
 export default function App() {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [localAgents, setLocalAgents] = useState<LocalAgentRuntime[]>([]);
@@ -366,6 +1340,11 @@ export default function App() {
   const [foundryBootstrapSession, setFoundryBootstrapSession] = useState<FoundryBootstrapSession | null>(null);
   const [localAgentLoading, setLocalAgentLoading] = useState(false);
   const [localAgentError, setLocalAgentError] = useState("");
+  const [settlements, setSettlements] = useState<Array<Record<string, unknown>>>([]);
+  const [settlementsLoading, setSettlementsLoading] = useState(false);
+  const [settlementsError, setSettlementsError] = useState("");
+  const [settlementsTotalEarned, setSettlementsTotalEarned] = useState(0);
+  const [earningsAgentFilter, setEarningsAgentFilter] = useState("__all__");
   const [localAgentNotice, setLocalAgentNotice] = useState("");
   const [foundryPortalOpened, setFoundryPortalOpened] = useState(false);
   const [developerForm, setDeveloperForm] = useState<DeveloperForm>({
@@ -390,6 +1369,7 @@ export default function App() {
     setHandshakeError("");
     setDeveloperTicket(null);
     setTicketError("");
+    void fetchSettlements();
     void probeHandshake(selectedAgent, foundryUrl);
     void refreshDeveloperContext(foundryUrl);
   }, [selectedAgent]);
@@ -397,6 +1377,7 @@ export default function App() {
   useEffect(() => {
     void refreshAgentInventory();
     void refreshDeveloperContext(foundryUrl);
+    void fetchSettlements();
   }, []);
 
   const selectedAgentEntry = useMemo(
@@ -796,6 +1777,49 @@ export default function App() {
       setLocalAgentError(String(err));
     } finally {
       setLocalAgentLoading(false);
+    }
+  }
+
+  async function fetchSettlements() {
+    setSettlementsLoading(true);
+    setSettlementsError("");
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/settlements`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            foundry_url: normalizedFoundryUrl || foundryUrl,
+            agent_name: "",
+            limit: 50,
+          }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as {
+        settlements: Array<Record<string, unknown>>;
+        count: number;
+        error?: string;
+      };
+      if (payload.error) {
+        setSettlementsError(payload.error);
+      }
+      const items = payload.settlements || [];
+      setSettlements(items);
+      const total = items.reduce(
+        (sum: number, s: Record<string, unknown>) => sum + (Number(s.amount) || 0),
+        0,
+      );
+      setSettlementsTotalEarned(total);
+    } catch (err) {
+      setSettlementsError(String(err));
+      setSettlements([]);
+      setSettlementsTotalEarned(0);
+    } finally {
+      setSettlementsLoading(false);
     }
   }
 
@@ -1990,6 +3014,216 @@ export default function App() {
                   </span>
                 ))}
               </div>
+            </section>
+          </div>
+        ) : null}
+
+        {activeView === "earnings" ? (
+          <div className="view-grid" style={{ gridTemplateColumns: "1fr" }}>
+            <section className="panel">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Earnings</p>
+                  <h3>Settlement Dashboard</h3>
+                </div>
+                <button
+                  className="secondary"
+                  onClick={() => void fetchSettlements()}
+                  disabled={settlementsLoading}
+                >
+                  {settlementsLoading ? "Loading..." : "Refresh"}
+                </button>
+              </div>
+
+              {(() => {
+                const uniqueAgents = [...new Set(settlements.map((s) => String(s.agent_name || "unknown")))];
+                const filtered = earningsAgentFilter === "__all__"
+                  ? settlements
+                  : settlements.filter((s) => String(s.agent_name || "") === earningsAgentFilter);
+                const filteredTotal = filtered.reduce(
+                  (sum, s) => sum + (Number(s.amount) || 0), 0,
+                );
+                return (
+                <>
+                  <div className="dashboard-grid" style={{ marginBottom: "18px" }}>
+                    <div className="metric-card">
+                      <span className="metric-label">Total earned</span>
+                      <strong style={{ fontSize: "2rem", color: "var(--success)" }}>
+                        ${filteredTotal.toFixed(2)}
+                      </strong>
+                      <span className="muted" style={{ fontSize: "0.84rem" }}>
+                        {filtered.length} settlement{filtered.length !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    <div className="metric-card">
+                      <span className="metric-label">Agent filter</span>
+                      <select
+                        value={earningsAgentFilter}
+                        onChange={(e) => setEarningsAgentFilter(e.target.value)}
+                        style={{
+                          fontSize: "1rem",
+                          fontWeight: 600,
+                          padding: "6px 10px",
+                          borderRadius: "8px",
+                          border: "1px solid var(--border)",
+                          background: "var(--surface)",
+                          color: "var(--text)",
+                          cursor: "pointer",
+                          maxWidth: "100%",
+                        }}
+                      >
+                        <option value="__all__">All Agents ({uniqueAgents.length})</option>
+                        {uniqueAgents.map((name) => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
+                      </select>
+                      <span className="muted" style={{ fontSize: "0.84rem" }}>
+                        Foundry settlements
+                      </span>
+                    </div>
+                  </div>
+
+                  {settlementsError ? (
+                    <div className="error">
+                      <strong>Settlement fetch error</strong>
+                      <p>{settlementsError}</p>
+                    </div>
+                  ) : null}
+
+                  {filtered.length === 0 && !settlementsLoading && !settlementsError ? (
+                    <div className="empty-state">
+                      <h4>No settlements yet</h4>
+                      <p className="muted">
+                        Settlements appear here after Foundry verifies your agent's completed tasks and triggers payment.
+                        Connect to a Foundry instance with your agent onboarded to see settlement history.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {filtered.length > 0 ? (
+                    <div className="timeline-grid single-column">
+                      {filtered.map((s, index) => {
+                        const amount = Number(s.amount) || 0;
+                        const currency = String(s.currency || "USD");
+                        const settlementId = String(s.settlement_id || "");
+                        const reqName = String(s.requirement_name || s.task_ref || "—");
+                        const agentName = String(s.agent_name || "—");
+                        const moduleName = String(s.module_name || "");
+                        const settledAt = String(s.settled_at || "");
+                        const reason = String(s.reason || "");
+                        const status = String(s.status || "settled");
+                        const stripeObj = (s.stripe || {}) as Record<string, unknown>;
+                        const stripeStatus = String(stripeObj.status || "");
+                        const stripePI = String(stripeObj.stripe_payment_intent_id || "");
+                        const checks = (s.verification_checks || []) as Array<Record<string, unknown>>;
+
+                        return (
+                          <div className="timeline-card" key={settlementId || `s-${index}`}>
+                            <div className="timeline-top">
+                              <div>
+                                <strong style={{ fontSize: "1.2rem", color: "var(--success)" }}>
+                                  +${amount.toFixed(2)} {currency}
+                                </strong>
+                              </div>
+                              <span className={`status-pill ${status === "settled" ? "success" : ""}`}>
+                                {status}
+                              </span>
+                            </div>
+                            <div className="kv-list" style={{ fontSize: "0.9rem" }}>
+                              <div>
+                                <span>Task</span>
+                                <strong>{reqName}</strong>
+                              </div>
+                              <div>
+                                <span>Agent</span>
+                                <strong>{agentName}</strong>
+                              </div>
+                              {moduleName ? (
+                                <div>
+                                  <span>Module</span>
+                                  <strong style={{ fontFamily: "monospace" }}>{moduleName}</strong>
+                                </div>
+                              ) : null}
+                              <div>
+                                <span>Settlement ID</span>
+                                <strong style={{ fontFamily: "monospace", fontSize: "0.82rem" }}>
+                                  {settlementId || "—"}
+                                </strong>
+                              </div>
+                              {reason ? (
+                                <div>
+                                  <span>Reason</span>
+                                  <strong>{reason}</strong>
+                                </div>
+                              ) : null}
+                              {settledAt ? (
+                                <div>
+                                  <span>Settled at</span>
+                                  <strong>{new Date(settledAt).toLocaleString()}</strong>
+                                </div>
+                              ) : null}
+                              {checks.length > 0 ? (
+                                <div>
+                                  <span>Checks</span>
+                                  <strong>
+                                    {checks.filter((c) => c.passed).length}/{checks.length} passed
+                                  </strong>
+                                </div>
+                              ) : null}
+                              {stripePI ? (
+                                <div>
+                                  <span>Stripe</span>
+                                  <strong>
+                                    <a
+                                      href={`https://dashboard.stripe.com/test/payments/${stripePI}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      style={{ color: "var(--accent)", textDecoration: "none" }}
+                                    >
+                                      {stripePI.slice(0, 24)}… ↗
+                                    </a>
+                                  </strong>
+                                </div>
+                              ) : stripeStatus ? (
+                                <div>
+                                  <span>Stripe</span>
+                                  <strong>{stripeStatus}</strong>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </>
+                );
+              })()}
+            </section>
+          </div>
+        ) : null}
+
+        {activeView === "skills" ? (
+          <div className="panel-grid">
+            <section className="card">
+              <SkillStorePanel
+                apiBase={API_BASE}
+                localAgents={localAgents}
+                selectedAgentName={selectedAgent || ""}
+              />
+            </section>
+          </div>
+        ) : null}
+
+        {activeView === "jobs" ? (
+          <div className="panel-grid">
+            <section className="card">
+              <JobBoardPanel
+                apiBase={API_BASE}
+                localAgents={localAgents}
+                selectedAgentName={selectedAgent || ""}
+                foundryUrl={foundryUrl}
+              />
             </section>
           </div>
         ) : null}

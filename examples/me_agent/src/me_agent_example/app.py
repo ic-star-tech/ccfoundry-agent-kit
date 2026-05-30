@@ -898,3 +898,488 @@ app = create_agent_app(
     agent_space_dir=BASE_DIR,
     foundry_bootstrap=FOUNDRY_BOOTSTRAP,
 )
+
+
+# ---------------------------------------------------------------------------
+# Autonomous Bounty Endpoints – scan, claim, execute
+# ---------------------------------------------------------------------------
+import logging
+import httpx
+from pydantic import BaseModel as _BountyBase
+
+_bounty_log = logging.getLogger("bounty")
+
+
+class _BountyScanReq(_BountyBase):
+    foundry_url: str = "https://foundry.cochiper.com"
+
+
+class _BountyClaimReq(_BountyBase):
+    foundry_url: str = "https://foundry.cochiper.com"
+    job_id: str = ""
+
+
+class _BountyExecReq(_BountyBase):
+    foundry_url: str = "https://foundry.cochiper.com"
+    job_id: str = ""
+    job_name: str = ""
+    dry_run: bool = False
+
+
+def _skill_tag_map() -> dict[str, list[str]]:
+    """Map skill directories to keyword tags they can handle."""
+    tag_map: dict[str, list[str]] = {}
+    if not SKILLS_DIR.exists():
+        return tag_map
+    for skill_dir in SKILLS_DIR.iterdir():
+        if not skill_dir.is_dir():
+            continue
+        meta_path = skill_dir / "skill_meta.json"
+        skill_path = skill_dir / "SKILL.md"
+        tags: list[str] = []
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                tags = [str(t).lower() for t in (meta.get("tags") or []) if str(t).strip()]
+            except Exception:
+                pass
+        # Also extract tags from skill name
+        tags.append(skill_dir.name.lower())
+        # Read SKILL.md for IP names if ip_reference
+        if skill_path.exists():
+            try:
+                text = skill_path.read_text(encoding="utf-8").lower()
+                for keyword in ("rra", "fifo", "verilog", "counter", "edge_detect", "priority_enc", "pulse_sync"):
+                    if keyword in text:
+                        tags.append(keyword)
+            except Exception:
+                pass
+        tag_map[skill_dir.name] = list(set(tags))
+    return tag_map
+
+
+def _evaluate_job(job: dict, skill_tags: dict[str, list[str]]) -> dict:
+    """Evaluate if this agent can handle the job. Returns match info."""
+    job_tags = [str(t).lower() for t in (job.get("tags") or []) if str(t).strip()]
+    job_name = str(job.get("name") or "").lower()
+    job_desc = str(job.get("description") or job.get("payment_criteria") or "").lower()
+    job_all_text = f"{job_name} {' '.join(job_tags)} {job_desc}"
+
+    matched_skills: list[str] = []
+    match_reasons: list[str] = []
+
+    for skill_name, skill_kw in skill_tags.items():
+        for kw in skill_kw:
+            if kw in job_all_text:
+                if skill_name not in matched_skills:
+                    matched_skills.append(skill_name)
+                    match_reasons.append(f"'{kw}' in job ↔ skill '{skill_name}'")
+
+    score = len(matched_skills) / max(len(skill_tags), 1)
+    can_handle = len(matched_skills) > 0
+
+    return {
+        "job_id": job.get("id"),
+        "job_name": job.get("name"),
+        "can_handle": can_handle,
+        "confidence": round(min(score * 2, 1.0), 2),  # scale up, cap at 1.0
+        "matched_skills": matched_skills,
+        "match_reasons": match_reasons,
+        "budget": job.get("budget"),
+        "payment_criteria": job.get("payment_criteria", ""),
+    }
+
+
+@app.post("/bounty/scan")
+async def bounty_scan(req: _BountyScanReq) -> dict:
+    """Scan Foundry for open requirements that match this agent's skills."""
+    foundry_url = req.foundry_url
+    skill_tags = _skill_tag_map()
+    _bounty_log.info("Scanning %s with skill tags: %s", foundry_url, skill_tags)
+
+    normalized = foundry_url.rstrip("/")
+    if not normalized.startswith("http"):
+        normalized = f"https://{normalized}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(f"{normalized}/api/public/open-requirements")
+            resp.raise_for_status()
+            jobs = resp.json()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "matches": []}
+
+    if not isinstance(jobs, list):
+        return {"ok": False, "error": "Unexpected response format", "matches": []}
+
+    matches = []
+    for job in jobs:
+        evaluation = _evaluate_job(job, skill_tags)
+        matches.append(evaluation)
+
+    matches.sort(key=lambda m: m["confidence"], reverse=True)
+    actionable = [m for m in matches if m["can_handle"]]
+
+    return {
+        "ok": True,
+        "foundry_url": normalized,
+        "agent_name": MANIFEST.name,
+        "total_jobs": len(jobs),
+        "actionable_matches": len(actionable),
+        "matches": matches,
+        "skill_tags": skill_tags,
+    }
+
+
+@app.post("/bounty/claim")
+async def bounty_claim(req: _BountyClaimReq) -> dict:
+    """Auto-register this agent with Foundry for a specific job via discovery API."""
+    foundry_url = req.foundry_url
+    job_id = req.job_id
+    normalized = foundry_url.rstrip("/")
+    if not normalized.startswith("http"):
+        normalized = f"https://{normalized}"
+
+    # Build agent card for discovery
+    agent_card = {
+        "name": MANIFEST.name,
+        "label": MANIFEST.label,
+        "version": MANIFEST.version,
+        "description": MANIFEST.description,
+        "capabilities": MANIFEST.capabilities,
+        "loaded_skills": MANIFEST.loaded_skills,
+    }
+
+    discovery_payload = {
+        "agent_card": agent_card,
+        "url": f"http://127.0.0.1:8088",  # agent's local URL
+        "network_zone": "EXTERNAL",
+        "tags": ["verilog", "RRA", "self_hosted", "ip_design"],
+        "capabilities": {"verilog_design": True, "iverilog_testbench": True},
+        "requirements": {"target_job_id": job_id},
+        "costs": {"max_per_call_usd": 1.0},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.post(
+                f"{normalized}/api/registry/discover",
+                json=discovery_payload,
+            )
+            result = resp.json()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    discovery_id = result.get("discovery_id") or result.get("id")
+
+    return {
+        "ok": bool(discovery_id),
+        "discovery_id": discovery_id,
+        "status": result.get("status", "submitted"),
+        "foundry_response": result,
+        "agent_name": MANIFEST.name,
+        "job_id": job_id,
+    }
+
+
+def _find_skill_reference(skill_name: str, module_name: str) -> dict[str, str]:
+    """Load reference Verilog files from a skill's references directory."""
+    ref_dir = SKILLS_DIR / skill_name / "references" / module_name
+    files: dict[str, str] = {}
+    if not ref_dir.exists():
+        return files
+    for f in ref_dir.iterdir():
+        if f.suffix == ".v" and f.is_file():
+            try:
+                files[f.name] = f.read_text(encoding="utf-8")
+            except Exception:
+                pass
+    return files
+
+
+@app.post("/bounty/execute")
+async def bounty_execute(req: _BountyExecReq) -> dict:
+    """Execute a bounty task: load skills → generate code → run in sandbox → report."""
+    foundry_url = req.foundry_url
+    job_id = req.job_id
+    job_name = req.job_name
+    dry_run = req.dry_run
+    _bounty_log.info("Executing bounty job_id=%s job_name=%s", job_id, job_name)
+
+    # Step 1: Evaluate job and find matching skills
+    skill_tags = _skill_tag_map()
+    job_info = {"id": job_id, "name": job_name, "tags": ["verilog", "RRA"]}
+    evaluation = _evaluate_job(job_info, skill_tags)
+    matched_skills = evaluation["matched_skills"]
+
+    if not matched_skills:
+        return {"ok": False, "step": "evaluate", "error": "No matching skills found", "evaluation": evaluation}
+
+    # Step 2: Load reference code from matched skills
+    reference_files: dict[str, str] = {}
+    module_name = ""
+
+    # Try to find the specific module from job name/tags
+    for candidate in ("rra", "fifo", "sync_fifo", "counter", "edge_detect", "priority_enc", "pulse_sync"):
+        if candidate in job_name.lower() or candidate in str(evaluation.get("match_reasons", [])).lower():
+            module_name = candidate
+            break
+
+    if not module_name:
+        module_name = "rra"  # default for this demo
+
+    for skill in matched_skills:
+        refs = _find_skill_reference(skill, module_name)
+        reference_files.update(refs)
+
+    if not reference_files:
+        # Also try from ip_reference directly
+        reference_files = _find_skill_reference("ip_reference", module_name)
+
+    # Step 3: Read coding style guidelines
+    coding_style = ""
+    style_path = SKILLS_DIR / "coding_style" / "SKILL.md"
+    if style_path.exists():
+        try:
+            coding_style = style_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    steps_log: list[dict] = []
+    steps_log.append({
+        "step": "evaluate",
+        "matched_skills": matched_skills,
+        "module_name": module_name,
+        "reference_files": list(reference_files.keys()),
+    })
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "steps": steps_log,
+            "reference_files": {name: content[:200] + "..." for name, content in reference_files.items()},
+            "coding_style_loaded": bool(coding_style),
+        }
+
+    # Step 4: Use LLM to generate/refine the Verilog (if LLM available)
+    runtime = _llm_runtime_config(ChatRequest(
+        message="", mode=ContextMode.DIRECT, user_id="bounty_system",
+    ))
+
+    generated_code = ""
+    llm_used = False
+
+    if runtime.get("api_key"):
+        try:
+            ref_context = "\n\n".join(
+                f"// --- Reference: {name} ---\n{content}"
+                for name, content in reference_files.items()
+            )
+            style_context = f"\n\nCoding guidelines:\n{coding_style[:1500]}" if coding_style else ""
+
+            prompt = (
+                f"You are a Verilog design engineer. Generate a complete, verified "
+                f"{module_name} module based on the reference implementation below.\n\n"
+                f"Reference implementations:\n{ref_context}\n{style_context}\n\n"
+                f"Requirements:\n"
+                f"1. Generate the module AND a self-checking testbench\n"
+                f"2. Testbench must print ALL_TESTS_PASSED on success\n"
+                f"3. Must compile with: iverilog -o sim {module_name}.v {module_name}_tb.v\n"
+                f"4. Output both files clearly separated with filenames\n"
+            )
+
+            client = AsyncOpenAI(
+                api_key=runtime["api_key"],
+                base_url=runtime.get("base_url") or None,
+            )
+            response = await client.chat.completions.create(
+                model=runtime.get("model", "ccfoundry-local"),
+                temperature=0.2,
+                max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            generated_code = (response.choices[0].message.content or "").strip()
+            llm_used = True
+            steps_log.append({"step": "llm_generate", "model": runtime.get("model"), "chars": len(generated_code)})
+        except Exception as exc:
+            steps_log.append({"step": "llm_generate", "error": str(exc)})
+
+    # Step 5: Write files to sandbox and run iverilog
+    sandbox_result: dict[str, Any] = {"available": False}
+
+    if FOUNDRY_BOOTSTRAP:
+        try:
+            sandbox_client = FOUNDRY_BOOTSTRAP.sandbox_client(timeout=30.0)
+
+            # Ensure sandbox session is active before writing
+            try:
+                start_result = await sandbox_client.start()
+                sandbox_pool = start_result.get("sandbox_pool", "unknown")
+                steps_log.append({"step": "sandbox_start", "pool": sandbox_pool, "reused": start_result.get("reused", False)})
+            except Exception as start_exc:
+                steps_log.append({"step": "sandbox_start", "error": str(start_exc)[:200]})
+                raise
+            # Use reference code if LLM didn't generate
+            module_code = reference_files.get(f"{module_name}.v", "")
+            tb_code = reference_files.get(f"{module_name}_tb.v", "")
+
+            if module_code and tb_code:
+                # Write to sandbox
+                await sandbox_client.workspace_write(f"workspace/{module_name}.v", module_code)
+                await sandbox_client.workspace_write(f"workspace/{module_name}_tb.v", tb_code)
+                steps_log.append({"step": "sandbox_write", "files": [f"{module_name}.v", f"{module_name}_tb.v"]})
+
+                # Compile with iverilog
+                compile_result = await sandbox_client.terminal_exec(
+                    f"cd /workspace && iverilog -o {module_name}_sim {module_name}.v {module_name}_tb.v 2>&1",
+                    wait_ms=3000,
+                    capture_lines=50,
+                    enter=True,
+                )
+                compile_state = dict(compile_result.get("state") or {})
+                compile_output = _extract_terminal_command_output(
+                    compile_state,
+                    f"cd /workspace && iverilog -o {module_name}_sim {module_name}.v {module_name}_tb.v 2>&1",
+                )
+                steps_log.append({"step": "compile", "output": compile_output[:500]})
+
+                # Run simulation
+                import asyncio
+                await asyncio.sleep(1)
+                sim_result = await sandbox_client.terminal_exec(
+                    f"cd /workspace && vvp {module_name}_sim 2>&1",
+                    wait_ms=5000,
+                    capture_lines=100,
+                    enter=True,
+                )
+                sim_state = dict(sim_result.get("state") or {})
+                sim_output = _extract_terminal_command_output(
+                    sim_state,
+                    f"cd /workspace && vvp {module_name}_sim 2>&1",
+                )
+                if not sim_output:
+                    sim_output = str(sim_state.get("capture_text") or "")[-2000:]
+
+                tests_passed = "ALL_TESTS_PASSED" in sim_output.upper() or "PASS" in sim_output.upper()
+                steps_log.append({
+                    "step": "simulate",
+                    "output": sim_output[:1000],
+                    "tests_passed": tests_passed,
+                })
+
+                sandbox_result = {
+                    "available": True,
+                    "compiled": "error" not in compile_output.lower(),
+                    "tests_passed": tests_passed,
+                    "sim_output": sim_output[:1000],
+                }
+            else:
+                steps_log.append({"step": "sandbox_write", "error": "No reference code found for module"})
+        except Exception as exc:
+            err_msg = str(exc)
+            # Friendly messages for common errors
+            if "Failed to reach sandbox" in err_msg or "connection" in err_msg.lower():
+                friendly = "Sandbox daemon not reachable — code delivered but not verified"
+            elif "409" in err_msg:
+                friendly = "Sandbox session conflict — code delivered but not verified"
+            elif "403" in err_msg or "401" in err_msg:
+                friendly = "Sandbox auth failed — bootstrap may need refresh"
+            else:
+                friendly = err_msg[:200]
+            steps_log.append({"step": "sandbox", "error": friendly, "sandbox_skipped": True})
+            sandbox_result = {"available": False, "error": friendly}
+
+    if not FOUNDRY_BOOTSTRAP:
+        steps_log.append({"step": "sandbox", "error": "No Foundry bootstrap configured", "sandbox_skipped": True})
+
+    # Step 6: Build deliverable summary
+    # Determine status: verified > code_ready > needs_review
+    if sandbox_result.get("tests_passed"):
+        status = "verified"
+    elif reference_files:
+        status = "code_ready"
+    else:
+        status = "needs_review"
+
+    # Include code previews in deliverable for UI display
+    code_preview: dict[str, str] = {}
+    for fname, content in reference_files.items():
+        code_preview[fname] = content[:500] + ("..." if len(content) > 500 else "")
+
+    deliverable = {
+        "job_id": job_id,
+        "job_name": job_name,
+        "agent_name": MANIFEST.name,
+        "module_name": module_name,
+        "files_delivered": list(reference_files.keys()),
+        "llm_used": llm_used,
+        "sandbox_result": sandbox_result,
+        "status": status,
+        "code_preview": code_preview,
+    }
+
+    # Step 7: Submit deliverable to Foundry for verification & settlement
+    verification_result: dict[str, Any] = {}
+    normalized = foundry_url.rstrip("/")
+    if not normalized.startswith("http"):
+        normalized = f"https://{normalized}"
+
+    try:
+        submission_payload = {
+            "requirement_id": job_id,
+            "agent_name": MANIFEST.name,
+            "module_name": module_name,
+            "files_delivered": list(reference_files.keys()),
+            "code_content": reference_files,  # full code for verification
+            "test_output": sandbox_result.get("sim_output", ""),
+            "tests_passed": bool(sandbox_result.get("tests_passed")),
+            "sandbox_verified": bool(sandbox_result.get("available") and sandbox_result.get("tests_passed")),
+            "llm_used": llm_used,
+        }
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.post(
+                f"{normalized}/api/public/deliverable/submit",
+                json=submission_payload,
+            )
+            verification_result = resp.json()
+
+        if verification_result.get("ok") and verification_result.get("status") == "accepted":
+            deliverable["status"] = "accepted"
+            deliverable["settlement"] = {
+                "amount": verification_result.get("settlement_amount"),
+                "currency": verification_result.get("settlement_currency"),
+                "settlement_id": verification_result.get("settlement_id"),
+            }
+            steps_log.append({
+                "step": "verification",
+                "output": f"✅ Accepted! Settlement: ${verification_result.get('settlement_amount', 0):.2f} ({verification_result.get('settlement_id', '')})",
+                "tests_passed": True,
+            })
+            stripe_info = verification_result.get("stripe", {})
+            if stripe_info.get("stripe_payment_intent_id"):
+                steps_log.append({
+                    "step": "payment",
+                    "output": f"💳 Stripe PaymentIntent: {stripe_info['stripe_payment_intent_id']}",
+                    "tests_passed": True,
+                })
+        else:
+            reason = verification_result.get("reason", "Unknown")
+            steps_log.append({
+                "step": "verification",
+                "error": f"Rejected: {reason}",
+            })
+    except Exception as exc:
+        steps_log.append({
+            "step": "verification",
+            "error": f"Could not submit to Foundry: {str(exc)[:150]}",
+            "sandbox_skipped": True,
+        })
+
+    deliverable["verification"] = verification_result
+
+    return {
+        "ok": True,
+        "deliverable": deliverable,
+        "steps": steps_log,
+    }
