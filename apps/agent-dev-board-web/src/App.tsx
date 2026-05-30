@@ -2744,21 +2744,13 @@ export default function App() {
                         : "Create local agent"}
                   </button>
                   {guideRunTarget === "cloud_run" ? (
-                    <>
-                      <button
-                        className="secondary"
-                        onClick={() => deployCloudRun(true)}
-                        disabled={cloudRunDeploying || !selectedLocalAgent}
-                      >
-                        2. Dry run
-                      </button>
-                      <button
-                        onClick={() => deployCloudRun(false)}
-                        disabled={cloudRunDeploying || !selectedLocalAgent || !cloudRunStatus?.gcloud?.authenticated}
-                      >
-                        {cloudRunDeploying ? "Starting..." : "2. Deploy to Cloud Run"}
-                      </button>
-                    </>
+                    <button
+                      className="secondary"
+                      onClick={() => deployCloudRun(true)}
+                      disabled={cloudRunDeploying || !selectedLocalAgent}
+                    >
+                      Dry run build
+                    </button>
                   ) : null}
                   <button
                     className="secondary"
@@ -2864,6 +2856,23 @@ export default function App() {
                   >
                     {ticketLoading ? "Requesting..." : "Request bootstrap ticket"}
                   </button>
+                  {guideRunTarget === "cloud_run" ? (
+                    <>
+                      <button
+                        className="secondary"
+                        onClick={() => deployCloudRun(true)}
+                        disabled={cloudRunDeploying || !selectedLocalAgent}
+                      >
+                        Dry run Cloud Run
+                      </button>
+                      <button
+                        onClick={() => deployCloudRun(false)}
+                        disabled={cloudRunDeploying || !selectedLocalAgent || !claimInstalled || !cloudRunStatus?.gcloud?.authenticated}
+                      >
+                        {cloudRunDeploying ? "Starting..." : "Deploy claimed source"}
+                      </button>
+                    </>
+                  ) : null}
                 </div>
                 {ticketError ? <div className="error">{ticketError}</div> : null}
               </div>
