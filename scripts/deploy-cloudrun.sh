@@ -183,8 +183,21 @@ fi
 if ! $SKIP_SCHEDULER; then
     log "Creating Cloud Scheduler job: $SCHEDULER_JOB"
 
-    # Get the default compute service account for OIDC auth
-    SA_EMAIL="${GCP_PROJECT}@appspot.gserviceaccount.com"
+    # Use the default Compute Engine service account for OIDC auth. It exists
+    # on GCE-backed projects without requiring an App Engine appspot account.
+    if $DRY_RUN; then
+        PROJECT_NUMBER="<project-number>"
+    else
+        PROJECT_NUMBER="$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')"
+    fi
+    SA_EMAIL="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+    run gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
+        --project="$GCP_PROJECT" \
+        --region="$GCP_REGION" \
+        --member="serviceAccount:${SA_EMAIL}" \
+        --role=roles/run.invoker \
+        --quiet
 
     # Delete existing job if present (ignore errors)
     run gcloud scheduler jobs delete "$SCHEDULER_JOB" \

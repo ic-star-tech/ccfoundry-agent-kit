@@ -2740,7 +2740,7 @@ export default function App() {
                     {localAgentLoading
                       ? "Creating..."
                       : guideRunTarget === "cloud_run"
-                        ? "Create source agent"
+                        ? "1. Create source agent"
                         : "Create local agent"}
                   </button>
                   {guideRunTarget === "cloud_run" ? (
@@ -2750,13 +2750,13 @@ export default function App() {
                         onClick={() => deployCloudRun(true)}
                         disabled={cloudRunDeploying || !selectedLocalAgent}
                       >
-                        Dry run Cloud Run
+                        2. Dry run
                       </button>
                       <button
                         onClick={() => deployCloudRun(false)}
                         disabled={cloudRunDeploying || !selectedLocalAgent || !cloudRunStatus?.gcloud?.authenticated}
                       >
-                        {cloudRunDeploying ? "Starting..." : "Deploy to Cloud Run"}
+                        {cloudRunDeploying ? "Starting..." : "2. Deploy to Cloud Run"}
                       </button>
                     </>
                   ) : null}

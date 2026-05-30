@@ -272,6 +272,7 @@ class CloudRunManager:
             except Exception:
                 continue
             if isinstance(payload, dict):
+                payload = self._with_extracted_result(payload)
                 payload["logs"] = _tail_logs(list(payload.get("logs") or []), 80)
                 jobs.append(payload)
             if len(jobs) >= limit:
@@ -293,7 +294,7 @@ class CloudRunManager:
             raise ValueError(f"Cloud Run deployment '{normalized}' is unreadable") from exc
         if not isinstance(payload, dict):
             raise ValueError(f"Cloud Run deployment '{normalized}' is invalid")
-        return payload
+        return self._with_extracted_result(payload)
 
     def start_deployment(
         self,
@@ -490,6 +491,18 @@ class CloudRunManager:
             job["logs"] = logs
         self._save_job(job)
 
+    def _with_extracted_result(self, job: dict[str, Any]) -> dict[str, Any]:
+        service_url = self._extract_service_url(list(job.get("logs") or []))
+        if not service_url:
+            return job
+        normalized = dict(job)
+        result = dict(normalized.get("result") or {})
+        result["service_url"] = service_url
+        result["health_url"] = f"{service_url.rstrip('/')}/health"
+        result["poll_url"] = f"{service_url.rstrip('/')}/foundry/poll"
+        normalized["result"] = result
+        return normalized
+
     def _run_deployment(self, job_id: str) -> None:
         job = self.get_deployment(job_id)
         command = list(job.get("command") or [])
@@ -521,11 +534,8 @@ class CloudRunManager:
 
         latest = self.get_deployment(job_id)
         result = dict(latest.get("result") or {})
-        service_url = self._extract_service_url(list(latest.get("logs") or []))
-        if service_url:
-            result["service_url"] = service_url
-            result["health_url"] = f"{service_url.rstrip('/')}/health"
-            result["poll_url"] = f"{service_url.rstrip('/')}/foundry/poll"
+        normalized_latest = self._with_extracted_result(latest)
+        result.update(dict(normalized_latest.get("result") or {}))
         next_status = "succeeded" if return_code == 0 else "failed"
         self._update_job(
             job_id,
@@ -538,10 +548,11 @@ class CloudRunManager:
     @staticmethod
     def _extract_service_url(logs: list[str]) -> str:
         patterns = [
+            re.compile(r"\[deploy\]\s+Service URL:\s*(https://\S+)"),
             re.compile(r"Service URL:\s*(https://\S+)"),
             re.compile(r"URL:\s*(https://\S+)"),
         ]
-        for line in logs:
+        for line in reversed(logs):
             for pattern in patterns:
                 match = pattern.search(line)
                 if match:
