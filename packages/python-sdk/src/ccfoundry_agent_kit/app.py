@@ -182,6 +182,29 @@ def create_agent_app(
     async def get_reflections(date: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         return agent_space.list_reflections(date=date, limit=limit)
 
+    @app.post("/foundry/poll")
+    async def foundry_poll() -> dict[str, Any]:
+        """Single poll cycle for Cloud Scheduler or external cron.
+
+        When ``AGENT_DEPLOY_MODE=cloud_run`` the internal background loops
+        are disabled.  Cloud Scheduler calls this endpoint periodically to
+        drive heartbeat, bootstrap-action polling, and task claiming.
+        """
+        results: dict[str, Any] = {"mode": os.getenv("AGENT_DEPLOY_MODE", "local")}
+        if foundry_bootstrap:
+            results["heartbeat"] = await foundry_bootstrap.heartbeat_once()
+        if pull_runtime and pull_runtime.ready():
+            rounds: list[dict[str, Any]] = []
+            for _ in range(30):
+                result = await pull_runtime.poll_once()
+                rounds.append(result)
+                if result.get("processed", 0) == 0:
+                    break
+            results["pull"] = {"rounds": len(rounds), "detail": rounds}
+        elif pull_runtime:
+            results["pull"] = {"status": "not_ready"}
+        return results
+
     @app.on_event("startup")
     async def startup_pull_runtime() -> None:
         if pull_runtime:

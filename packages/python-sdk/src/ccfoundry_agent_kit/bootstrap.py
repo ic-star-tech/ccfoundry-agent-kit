@@ -334,10 +334,32 @@ class FoundryBootstrap:
             "core_files": {},
         }
 
+    @staticmethod
+    def _is_cloud_deploy() -> bool:
+        return str(os.getenv("AGENT_DEPLOY_MODE", "local")).strip().lower() == "cloud_run"
+
+    async def heartbeat_once(self) -> dict[str, Any]:
+        """Execute a single heartbeat + bootstrap poll cycle.
+
+        Designed for external triggers such as Cloud Scheduler so the
+        agent container does not need a persistent internal loop.
+        """
+        if not self.config.enabled:
+            return {"status": "disabled"}
+        await self._announce_or_heartbeat()
+        return {
+            "status": "ok",
+            "discovery_status": self.state.discovery_status,
+            "registration_status": self.state.registration_status,
+        }
+
     async def start(self) -> None:
         if not self.config.enabled:
             return
         await self._announce_or_heartbeat()
+        if self._is_cloud_deploy():
+            logger.info("AGENT_DEPLOY_MODE=cloud_run — skipping internal heartbeat loop")
+            return
         if self._task and not self._task.done():
             return
         self._stop_event.clear()

@@ -35,6 +35,10 @@ class FoundryPullRuntime:
         self._stop = asyncio.Event()
         self._worker_id = f"pull-agent:{socket.gethostname()}:{os.getpid()}"
 
+    @staticmethod
+    def _is_cloud_deploy() -> bool:
+        return str(os.getenv("AGENT_DEPLOY_MODE", "local")).strip().lower() == "cloud_run"
+
     def enabled(self) -> bool:
         return str(self.bootstrap.config.runtime_transport or "").strip().lower() == "pull"
 
@@ -47,8 +51,30 @@ class FoundryPullRuntime:
             and str(self.bootstrap.state.registration_status or "").strip().upper() == "APPROVED"
         )
 
+    async def poll_once(self) -> dict[str, Any]:
+        """Execute a single claim+process cycle.
+
+        Designed for external triggers such as Cloud Scheduler so the
+        agent container does not need a persistent internal loop.
+        """
+        if not self.ready():
+            return {"status": "not_ready", "processed": 0}
+        try:
+            claimed = await self._claim()
+        except Exception as exc:
+            log.warning("poll_once claim failed: %s", exc)
+            return {"status": "claim_error", "processed": 0, "error": str(exc)}
+        processed = 0
+        for invocation in claimed:
+            await self._process_invocation(invocation)
+            processed += 1
+        return {"status": "ok", "processed": processed}
+
     async def start(self) -> None:
         if not self.enabled() or self._task is not None:
+            return
+        if self._is_cloud_deploy():
+            log.info("AGENT_DEPLOY_MODE=cloud_run — skipping internal pull loop")
             return
         self._stop.clear()
         self._task = asyncio.create_task(self._run_loop(), name="foundry-pull-runtime")
