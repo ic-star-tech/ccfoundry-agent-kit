@@ -68,6 +68,19 @@ button.secondary {
   box-shadow: none;
 }
 
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  border-radius: 16px;
+  padding: 12px 18px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 700;
+}
+
 code {
   font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
 }
@@ -765,6 +778,22 @@ textarea {
   margin-top: 16px;
 }
 
+.cloud-run-auth-box {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(214, 222, 239, 0.92);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.cloud-run-auth-code-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
 .runtime-card {
   border: 1px solid rgba(214, 222, 239, 0.92);
   border-radius: 24px;
@@ -891,6 +920,10 @@ textarea {
   }
 
   .cloud-run-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cloud-run-auth-code-row {
     grid-template-columns: 1fr;
   }
 }

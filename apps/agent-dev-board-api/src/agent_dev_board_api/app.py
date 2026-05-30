@@ -119,6 +119,10 @@ class CloudRunDeployRequest(BaseModel):
     dry_run: bool = False
 
 
+class CloudRunAuthCodeRequest(BaseModel):
+    code: str
+
+
 LOCAL_AGENT_MANAGER = LocalAgentManager(
     repo_root=REPO_ROOT,
     runtime_dir=RUNTIME_DIR,
@@ -577,6 +581,40 @@ async def cloud_run_status() -> dict[str, Any]:
     return CLOUD_RUN_MANAGER.status()
 
 
+@app.post("/api/cloud-run/auth/start")
+async def start_cloud_run_auth() -> dict[str, Any]:
+    try:
+        return CLOUD_RUN_MANAGER.start_auth_session()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/cloud-run/auth/{session_id}")
+async def get_cloud_run_auth(session_id: str) -> dict[str, Any]:
+    try:
+        return CLOUD_RUN_MANAGER.get_auth_session(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/cloud-run/auth/{session_id}/code")
+async def submit_cloud_run_auth_code(session_id: str, request: CloudRunAuthCodeRequest) -> dict[str, Any]:
+    try:
+        return CLOUD_RUN_MANAGER.submit_auth_code(session_id, request.code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/cloud-run/auth/{session_id}/cancel")
+async def cancel_cloud_run_auth(session_id: str) -> dict[str, Any]:
+    try:
+        return CLOUD_RUN_MANAGER.cancel_auth_session(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/api/cloud-run/deployments")
 async def list_cloud_run_deployments(limit: int = 20) -> list[dict[str, Any]]:
     return CLOUD_RUN_MANAGER.list_deployments(limit=limit)
@@ -922,10 +960,23 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
             "force_rediscover": bool(request.force_rediscover),
         }
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            response = await client.post(
-                f"{agent.base_url.rstrip('/')}/foundry/bootstrap/developer-claim",
-                json=apply_payload,
-            )
+            try:
+                response = await client.post(
+                    f"{agent.base_url.rstrip('/')}/foundry/bootstrap/developer-claim",
+                    json=apply_payload,
+                )
+            except httpx.TimeoutException as exc:
+                logger.warning("Developer claim apply timed out for %s", agent.base_url, exc_info=exc)
+                raise HTTPException(
+                    status_code=502,
+                    detail="Timed out while applying the discovery claim to the agent. The ticket may still have been issued; refresh the flow and retry if the claim is not installed.",
+                ) from exc
+            except httpx.HTTPError as exc:
+                logger.warning("Developer claim apply failed for %s", agent.base_url, exc_info=exc)
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to reach the agent while applying the discovery claim.",
+                ) from exc
         if not response.is_success:
             logger.warning(
                 "Developer claim apply failed for %s with status %s",
@@ -943,9 +994,13 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
         f"FOUNDRY_BOOTSTRAP_DELIVERY={str(ticket_response.get('bootstrap_delivery') or request.bootstrap_delivery or 'poll')}",
     ]
     if claim_token:
-        env_lines.append(f"FOUNDRY_DISCOVERY_CLAIM_TOKEN={claim_token}")
+        env_lines.append("FOUNDRY_DISCOVERY_CLAIM_TOKEN=<redacted>")
     if developer_identity:
         env_lines.append(f"FOUNDRY_DEVELOPER_IDENTITY_JSON={json.dumps(developer_identity, ensure_ascii=False)}")
+    safe_ticket_response = dict(ticket_response)
+    for secret_key in ("discovery_claim_token", "claim_token", "agent_secret", "api_key", "token"):
+        if secret_key in safe_ticket_response:
+            safe_ticket_response[secret_key] = "<redacted>"
 
     return {
         "ok": True,
@@ -955,7 +1010,7 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
         "git": git_context,
         "github": github_identity,
         "developer_identity": developer_identity,
-        "ticket": ticket_response,
+        "ticket": safe_ticket_response,
         "claim_applied": bool(apply_result),
         "apply_result": apply_result,
         "env_snippet": "\n".join(env_lines),

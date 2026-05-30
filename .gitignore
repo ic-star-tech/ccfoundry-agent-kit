@@ -17,6 +17,12 @@ build/
 .env.*
 !.env.example
 !**/.env.example
+*.pem
+*.key
+*credentials*.json
+*client_secret*.json
+*service-account*.json
+.config/gcloud/
 *.log
 coverage/
 .shared/
@@ -34,6 +40,7 @@ examples/me_agent/workspace/*
 apps/agent-dev-board-api/agents/
 apps/agent-dev-board-api/local_agents.json
 apps/agent-dev-board-api/cloud_run_deployments/
+apps/agent-dev-board-api/cloud_run_auth/
 
 # Temporary patch/debug scripts
 patch_*.py

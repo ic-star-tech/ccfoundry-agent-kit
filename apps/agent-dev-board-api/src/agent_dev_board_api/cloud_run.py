@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.request
 import uuid
 from configparser import ConfigParser
 from datetime import datetime, timezone
@@ -72,6 +73,18 @@ def _read_gcloud_config() -> dict[str, str]:
     return result
 
 
+def _metadata_service_account_email() -> str:
+    request = urllib.request.Request(
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email",
+        headers={"Metadata-Flavor": "Google"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=0.8) as response:
+            return response.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+
+
 def _safe_int(value: Any, default: int) -> int:
     try:
         return int(value)
@@ -93,9 +106,13 @@ class CloudRunManager:
         self.runtime_dir = runtime_dir.resolve()
         self.script_path = self.repo_root / "scripts" / "deploy-cloudrun.sh"
         self.jobs_dir = self.runtime_dir / "cloud_run_deployments"
+        self.auth_dir = self.runtime_dir / "cloud_run_auth"
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
+        self.auth_dir.mkdir(parents=True, exist_ok=True)
         self._jobs: dict[str, dict[str, Any]] = {}
         self._processes: dict[str, subprocess.Popen[str]] = {}
+        self._auth_sessions: dict[str, dict[str, Any]] = {}
+        self._auth_processes: dict[str, subprocess.Popen[str]] = {}
         self._lock = threading.RLock()
 
     def status(self) -> dict[str, Any]:
@@ -110,8 +127,8 @@ class CloudRunManager:
         errors: list[str] = []
 
         if gcloud_path:
-            _, gcloud_version, version_err = _run_command(["gcloud", "--version"], timeout=5)
-            if version_err:
+            _, gcloud_version, version_err = _run_command(["gcloud", "--version"], timeout=12)
+            if version_err and version_err != "command timed out":
                 errors.append(version_err)
             file_config = _read_gcloud_config()
             active_account = file_config.get("account", "")
@@ -125,6 +142,11 @@ class CloudRunManager:
                     accounts = [item for item in raw_accounts if isinstance(item, dict)]
                     active = next((item for item in accounts if item.get("status") == "ACTIVE"), {})
                     active_account = str(active.get("account") or "").strip()
+            if not active_account:
+                metadata_account = _metadata_service_account_email()
+                if metadata_account:
+                    active_account = metadata_account
+                    accounts = [{"account": metadata_account, "status": "ACTIVE", "source": "gce_metadata"}]
         else:
             errors.append("gcloud CLI is not installed or not on PATH")
 
@@ -159,11 +181,88 @@ class CloudRunManager:
             },
             "commands": {
                 "login": "gcloud auth login",
+                "login_no_browser": "gcloud auth login --no-launch-browser --quiet",
                 "set_project": "gcloud config set project <project-id>",
                 "configure_docker": "gcloud auth configure-docker <region>-docker.pkg.dev --quiet",
             },
             "errors": errors,
         }
+
+    def start_auth_session(self) -> dict[str, Any]:
+        if not shutil.which("gcloud"):
+            raise RuntimeError("gcloud CLI is not installed or not on PATH")
+        session_id = uuid.uuid4().hex[:12]
+        command = ["gcloud", "auth", "login", "--no-launch-browser", "--quiet"]
+        session = {
+            "id": session_id,
+            "status": "starting",
+            "created_at": _utcnow_iso(),
+            "updated_at": _utcnow_iso(),
+            "command": command,
+            "auth_url": "",
+            "logs": [],
+            "return_code": None,
+            "error": "",
+        }
+        process = subprocess.Popen(
+            command,
+            cwd=str(self.repo_root),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        with self._lock:
+            self._auth_sessions[session_id] = session
+            self._auth_processes[session_id] = process
+            self._save_auth_session(session_id, session)
+        thread = threading.Thread(target=self._run_auth_session, args=(session_id,), daemon=True)
+        thread.start()
+        return self.get_auth_session(session_id)
+
+    def get_auth_session(self, session_id: str) -> dict[str, Any]:
+        normalized = str(session_id or "").strip()
+        with self._lock:
+            session = self._auth_sessions.get(normalized)
+            if session:
+                return dict(session)
+        path = self._auth_path(normalized)
+        if not path.exists():
+            raise ValueError(f"Unknown Cloud Run auth session '{normalized}'")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ValueError(f"Cloud Run auth session '{normalized}' is unreadable") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"Cloud Run auth session '{normalized}' is invalid")
+        return payload
+
+    def submit_auth_code(self, session_id: str, code: str) -> dict[str, Any]:
+        normalized = str(session_id or "").strip()
+        auth_code = str(code or "").strip()
+        if not auth_code:
+            raise ValueError("Authorization code is required")
+        with self._lock:
+            process = self._auth_processes.get(normalized)
+        if not process or process.poll() is not None or not process.stdin:
+            raise RuntimeError("Cloud Run auth session is not waiting for input")
+        try:
+            process.stdin.write(f"{auth_code}\n")
+            process.stdin.flush()
+        except Exception as exc:
+            raise RuntimeError("Failed to send authorization code to gcloud") from exc
+        self._update_auth_session(normalized, {"code_submitted_at": _utcnow_iso()})
+        return self.get_auth_session(normalized)
+
+    def cancel_auth_session(self, session_id: str) -> dict[str, Any]:
+        normalized = str(session_id or "").strip()
+        with self._lock:
+            process = self._auth_processes.get(normalized)
+        if process and process.poll() is None:
+            process.terminate()
+        self._update_auth_session(normalized, {"status": "canceled", "updated_at": _utcnow_iso()})
+        return self.get_auth_session(normalized)
 
     def list_deployments(self, *, limit: int = 20) -> list[dict[str, Any]]:
         jobs: list[dict[str, Any]] = []
@@ -297,6 +396,71 @@ class CloudRunManager:
         self._append_log(normalized, "[dev-board] cancel requested")
         self._update_job(normalized, status="cancelled")
         return self.get_deployment(normalized)
+
+    def _auth_path(self, session_id: str) -> Path:
+        safe = re.sub(r"[^a-zA-Z0-9_-]", "", str(session_id or ""))
+        return self.auth_dir / f"{safe}.json"
+
+    def _save_auth_session(self, session_id: str, session: dict[str, Any]) -> None:
+        session["logs"] = _tail_logs(list(session.get("logs") or []), 160)
+        session["updated_at"] = _utcnow_iso()
+        with self._lock:
+            self._auth_sessions[session_id] = dict(session)
+        self._auth_path(session_id).write_text(
+            json.dumps(session, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _update_auth_session(self, session_id: str, updates: dict[str, Any]) -> None:
+        with self._lock:
+            session = dict(self._auth_sessions.get(session_id) or self.get_auth_session(session_id))
+            session.update(updates)
+        self._save_auth_session(session_id, session)
+
+    def _append_auth_log(self, session_id: str, line: str) -> None:
+        with self._lock:
+            session = dict(self._auth_sessions.get(session_id) or self.get_auth_session(session_id))
+            logs = list(session.get("logs") or [])
+            clean_line = line.rstrip("\n")
+            logs.append(clean_line)
+            session["logs"] = logs
+            match = re.search(r"https://accounts\.google\.com/[^\s]+", clean_line)
+            if match:
+                session["auth_url"] = match.group(0)
+        self._save_auth_session(session_id, session)
+
+    def _run_auth_session(self, session_id: str) -> None:
+        with self._lock:
+            process = self._auth_processes.get(session_id)
+        if not process:
+            self._update_auth_session(session_id, {"status": "failed", "error": "gcloud process was not started"})
+            return
+        self._update_auth_session(session_id, {"status": "running"})
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                if line:
+                    self._append_auth_log(session_id, line)
+            return_code = process.wait()
+        except Exception as exc:
+            self._update_auth_session(session_id, {"status": "failed", "error": str(exc), "return_code": 1})
+            return
+        finally:
+            with self._lock:
+                self._auth_processes.pop(session_id, None)
+
+        latest = self.get_auth_session(session_id)
+        if latest.get("status") == "canceled":
+            self._update_auth_session(session_id, {"return_code": return_code})
+            return
+        self._update_auth_session(
+            session_id,
+            {
+                "status": "succeeded" if return_code == 0 else "failed",
+                "return_code": return_code,
+                "error": "" if return_code == 0 else f"gcloud auth login exited with {return_code}",
+            },
+        )
 
     def _job_path(self, job_id: str) -> Path:
         safe = re.sub(r"[^a-zA-Z0-9_-]", "", str(job_id or ""))

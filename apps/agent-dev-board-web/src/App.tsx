@@ -220,6 +220,17 @@ type CloudRunDeployment = {
   finished_at?: string;
 };
 
+type CloudRunAuthSession = {
+  id: string;
+  status: string;
+  auth_url?: string;
+  logs?: string[];
+  return_code?: number | null;
+  error?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 const API_PORT = import.meta.env.VITE_API_PORT || "8090";
 const DEFAULT_FOUNDRY_URL = "https://foundry.cochiper.com";
 const CUSTOM_FOUNDRY_PRESET_ID = "__custom__";
@@ -1427,6 +1438,9 @@ export default function App() {
   const [cloudRunDeployments, setCloudRunDeployments] = useState<CloudRunDeployment[]>([]);
   const [cloudRunCurrentJob, setCloudRunCurrentJob] = useState<CloudRunDeployment | null>(null);
   const [cloudRunDeploying, setCloudRunDeploying] = useState(false);
+  const [cloudRunAuthSession, setCloudRunAuthSession] = useState<CloudRunAuthSession | null>(null);
+  const [cloudRunAuthLoading, setCloudRunAuthLoading] = useState(false);
+  const [cloudRunAuthCode, setCloudRunAuthCode] = useState("");
   const [cloudRunForm, setCloudRunForm] = useState<CloudRunForm>({
     project: "glassy-fort-497911-u3",
     region: "us-central1",
@@ -1468,6 +1482,16 @@ export default function App() {
     }, 2000);
     return () => window.clearInterval(timer);
   }, [cloudRunCurrentJob?.id, cloudRunCurrentJob?.status]);
+
+  useEffect(() => {
+    if (!cloudRunAuthSession || !["starting", "running"].includes(textValue(cloudRunAuthSession.status))) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refreshCloudRunAuthSession(cloudRunAuthSession.id);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [cloudRunAuthSession?.id, cloudRunAuthSession?.status]);
 
   const selectedAgentEntry = useMemo(
     () => agents.find((agent) => agent.name === selectedAgent) ?? null,
@@ -2075,6 +2099,93 @@ export default function App() {
     }
   }
 
+  async function startCloudRunAuth() {
+    setCloudRunAuthLoading(true);
+    setCloudRunError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/cloud-run/auth/start`, { method: "POST" });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as CloudRunAuthSession;
+      setCloudRunAuthSession(payload);
+      setCloudRunAuthCode("");
+    } catch (err) {
+      setCloudRunError(String(err));
+    } finally {
+      setCloudRunAuthLoading(false);
+    }
+  }
+
+  async function refreshCloudRunAuthSession(sessionId: string) {
+    if (!sessionId) {
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/api/cloud-run/auth/${encodeURIComponent(sessionId)}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as CloudRunAuthSession;
+      setCloudRunAuthSession(payload);
+      if (payload.status === "succeeded") {
+        void refreshCloudRunStatus();
+      }
+    } catch (err) {
+      setCloudRunError(String(err));
+    }
+  }
+
+  async function submitCloudRunAuthCode() {
+    if (!cloudRunAuthSession || !cloudRunAuthCode.trim()) {
+      return;
+    }
+    setCloudRunAuthLoading(true);
+    setCloudRunError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/cloud-run/auth/${encodeURIComponent(cloudRunAuthSession.id)}/code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: cloudRunAuthCode.trim() }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as CloudRunAuthSession;
+      setCloudRunAuthSession(payload);
+      setCloudRunAuthCode("");
+      window.setTimeout(() => {
+        void refreshCloudRunAuthSession(payload.id);
+      }, 1200);
+    } catch (err) {
+      setCloudRunError(String(err));
+    } finally {
+      setCloudRunAuthLoading(false);
+    }
+  }
+
+  async function cancelCloudRunAuth() {
+    if (!cloudRunAuthSession) {
+      return;
+    }
+    setCloudRunAuthLoading(true);
+    setCloudRunError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/cloud-run/auth/${encodeURIComponent(cloudRunAuthSession.id)}/cancel`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as CloudRunAuthSession;
+      setCloudRunAuthSession(payload);
+    } catch (err) {
+      setCloudRunError(String(err));
+    } finally {
+      setCloudRunAuthLoading(false);
+    }
+  }
+
   async function deployCloudRun(dryRun: boolean, agentNameOverride = "") {
     const agentName = agentNameOverride || selectedLocalAgent?.name || selectedAgent;
     if (!agentName) {
@@ -2228,7 +2339,11 @@ export default function App() {
         refreshDeveloperContext(foundryUrl),
       ]);
     } catch (err) {
-      setTicketError(String(err));
+      if (err instanceof TypeError) {
+        setTicketError(`Dev Board API did not respond at ${API_BASE}. Check that port ${API_PORT} is reachable from this browser.`);
+      } else {
+        setTicketError(String(err));
+      }
     } finally {
       setTicketLoading(false);
     }
@@ -2498,7 +2613,52 @@ export default function App() {
                     </div>
                     {!cloudRunStatus?.gcloud?.authenticated ? (
                       <div className="code-block compact-code-block">
-                        <pre>{textValue(cloudRunStatus?.commands?.login, "gcloud auth login")}</pre>
+                        <pre>{textValue(cloudRunStatus?.commands?.login_no_browser, "gcloud auth login --no-launch-browser")}</pre>
+                      </div>
+                    ) : null}
+                    <div className="actions split-actions compact-actions">
+                      <button className="secondary" onClick={startCloudRunAuth} disabled={cloudRunAuthLoading}>
+                        {cloudRunAuthLoading ? "Starting login..." : "Google Cloud login"}
+                      </button>
+                      {cloudRunAuthSession && ["starting", "running"].includes(textValue(cloudRunAuthSession.status)) ? (
+                        <button className="secondary" onClick={cancelCloudRunAuth} disabled={cloudRunAuthLoading}>
+                          Cancel login
+                        </button>
+                      ) : null}
+                    </div>
+                    {cloudRunAuthSession ? (
+                      <div className="cloud-run-auth-box">
+                        <div className="kv-list compact-kv">
+                          <div>
+                            <span>Login status</span>
+                            <strong>{cloudRunAuthSession.status}</strong>
+                          </div>
+                        </div>
+                        {cloudRunAuthSession.auth_url ? (
+                          <a className="secondary link-button" href={cloudRunAuthSession.auth_url} target="_blank" rel="noreferrer">
+                            Open Google login
+                          </a>
+                        ) : (
+                          <div className="code-block compact-code-block">
+                            <pre>{(cloudRunAuthSession.logs || []).slice(-4).join("\n") || "Waiting for Google login URL..."}</pre>
+                          </div>
+                        )}
+                        {["starting", "running"].includes(textValue(cloudRunAuthSession.status)) ? (
+                          <div className="cloud-run-auth-code-row">
+                            <label>
+                              Authorization code
+                              <input
+                                value={cloudRunAuthCode}
+                                onChange={(event) => setCloudRunAuthCode(event.target.value)}
+                                placeholder="Paste code from Google"
+                              />
+                            </label>
+                            <button onClick={submitCloudRunAuthCode} disabled={cloudRunAuthLoading || !cloudRunAuthCode.trim()}>
+                              Submit code
+                            </button>
+                          </div>
+                        ) : null}
+                        {cloudRunAuthSession.error ? <div className="error">{cloudRunAuthSession.error}</div> : null}
                       </div>
                     ) : null}
                     <div className="cloud-run-form-grid guide-cloud-run-grid">
@@ -3146,7 +3306,52 @@ export default function App() {
                   </div>
                   {!cloudRunStatus?.gcloud?.authenticated ? (
                     <div className="code-block">
-                      <pre>{textValue(cloudRunStatus?.commands?.login, "gcloud auth login")}</pre>
+                      <pre>{textValue(cloudRunStatus?.commands?.login_no_browser, "gcloud auth login --no-launch-browser")}</pre>
+                    </div>
+                  ) : null}
+                  <div className="actions split-actions">
+                    <button className="secondary" onClick={startCloudRunAuth} disabled={cloudRunAuthLoading}>
+                      {cloudRunAuthLoading ? "Starting login..." : "Google Cloud login"}
+                    </button>
+                    {cloudRunAuthSession && ["starting", "running"].includes(textValue(cloudRunAuthSession.status)) ? (
+                      <button className="secondary" onClick={cancelCloudRunAuth} disabled={cloudRunAuthLoading}>
+                        Cancel login
+                      </button>
+                    ) : null}
+                  </div>
+                  {cloudRunAuthSession ? (
+                    <div className="cloud-run-auth-box">
+                      <div className="kv-list compact-kv">
+                        <div>
+                          <span>Login status</span>
+                          <strong>{cloudRunAuthSession.status}</strong>
+                        </div>
+                      </div>
+                      {cloudRunAuthSession.auth_url ? (
+                        <a className="link-button" href={cloudRunAuthSession.auth_url} target="_blank" rel="noreferrer">
+                          Open Google login
+                        </a>
+                      ) : (
+                        <div className="code-block compact-code-block">
+                          <pre>{(cloudRunAuthSession.logs || []).slice(-4).join("\n") || "Waiting for Google login URL..."}</pre>
+                        </div>
+                      )}
+                      {["starting", "running"].includes(textValue(cloudRunAuthSession.status)) ? (
+                        <div className="cloud-run-auth-code-row">
+                          <label>
+                            Authorization code
+                            <input
+                              value={cloudRunAuthCode}
+                              onChange={(event) => setCloudRunAuthCode(event.target.value)}
+                              placeholder="Paste code from Google"
+                            />
+                          </label>
+                          <button onClick={submitCloudRunAuthCode} disabled={cloudRunAuthLoading || !cloudRunAuthCode.trim()}>
+                            Submit code
+                          </button>
+                        </div>
+                      ) : null}
+                      {cloudRunAuthSession.error ? <div className="error">{cloudRunAuthSession.error}</div> : null}
                     </div>
                   ) : null}
                   {cloudRunStatus?.errors?.length ? (
