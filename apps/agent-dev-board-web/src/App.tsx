@@ -1561,10 +1561,10 @@ export default function App() {
   );
   const displayedCloudRunDeployment =
     cloudRunCurrentJob?.agent_name === selectedAgent ? cloudRunCurrentJob : selectedCloudRunDeployment;
-  const selectedCloudRunUrl = textValue(
-    displayedCloudRunDeployment?.result?.service_url,
-    textValue(selectedCloudRunDeployment?.result?.service_url),
-  );
+  const cloudRunDeploymentSucceeded = textValue(displayedCloudRunDeployment?.status) === "succeeded";
+  const cloudRunPollObserved = Boolean(textValue(bootstrapState.last_polled_at));
+  const deploymentTargetReady = guideRunTarget === "cloud_run" ? cloudRunDeploymentSucceeded : Boolean(selectedLocalAgent);
+  const smokeObserved = guideRunTarget === "cloud_run" ? cloudRunDeploymentSucceeded && cloudRunPollObserved : hasConversation;
 
   useEffect(() => {
     if (foundryUrl.trim()) {
@@ -2481,14 +2481,14 @@ export default function App() {
               </p>
               <div className="guide-progress">
                 <span className={`chip ${selectedLocalAgent ? "tone-success" : ""}`}>1. Agent source</span>
-                <span className={`chip ${guideRunTarget === "cloud_run" ? "tone-success" : ""}`}>
-                  Target: {guideRunTarget === "cloud_run" ? "Cloud Run" : "Local"}
+                <span className={`chip ${deploymentTargetReady ? "tone-success" : ""}`}>
+                  2. {guideRunTarget === "cloud_run" ? "Cloud Run" : "Local"} target
                 </span>
-                <span className={`chip ${developerSessionReady ? "tone-success" : ""}`}>2. Developer login</span>
-                <span className={`chip ${claimInstalled ? "tone-success" : ""}`}>3. Claim installed</span>
-                <span className={`chip ${onboardingApproved ? "tone-success" : onboardingRetired ? "tone-warn" : ""}`}>4. Foundry approved</span>
-                <span className={`chip ${hasConversation ? "tone-success" : ""}`}>5. Playground test</span>
-                <span className={`chip ${foundryPortalOpened ? "tone-success" : ""}`}>6. Foundry test</span>
+                <span className={`chip ${developerSessionReady ? "tone-success" : ""}`}>3. GitHub login</span>
+                <span className={`chip ${claimInstalled ? "tone-success" : ""}`}>4. Foundry claim</span>
+                <span className={`chip ${onboardingApproved ? "tone-success" : onboardingRetired ? "tone-warn" : ""}`}>5. Onboarded</span>
+                <span className={`chip ${smokeObserved ? "tone-success" : ""}`}>6. Smoke test</span>
+                <span className={`chip ${foundryPortalOpened ? "tone-success" : ""}`}>7. Foundry test</span>
               </div>
             </section>
 
@@ -2497,52 +2497,19 @@ export default function App() {
                 <div className="step-header">
                   <span className="step-index">1</span>
                   <div>
-                    <h4>{guideRunTarget === "cloud_run" ? "Create a Google Cloud Run agent" : "Create a local agent"}</h4>
+                    <h4>Create agent source</h4>
                     <p className="muted">
-                      Start from the template, give it a stable name, and choose the runtime target before onboarding.
+                      Start from the template, give it a stable name, and load any skills the agent should carry.
                     </p>
                   </div>
-                </div>
-                <div className="run-target-toggle" role="radiogroup" aria-label="Run target">
-                  <button
-                    type="button"
-                    className={`run-target-button ${guideRunTarget === "local" ? "active" : ""}`}
-                    onClick={() => setGuideRunTarget("local")}
-                  >
-                    <strong>Local Agent</strong>
-                    <span>Run from this Dev Board host.</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`run-target-button ${guideRunTarget === "cloud_run" ? "active" : ""}`}
-                    onClick={() => {
-                      setGuideRunTarget("cloud_run");
-                      void refreshCloudRunStatus();
-                    }}
-                  >
-                    <strong>Google Cloud Run</strong>
-                    <span>Build and run the agent in GCP.</span>
-                  </button>
                 </div>
                 {selectedLocalAgent ? (
                   <div className="reply">
                     <strong>{selectedLocalAgent.label}</strong>
-                    {guideRunTarget === "cloud_run" ? (
-                      <p>
-                        Source workspace: <code>{selectedLocalAgent.name}</code>
-                        {selectedCloudRunUrl ? (
-                          <>
-                            {" "}
-                            deployed at <code>{displaySafeUrl(selectedCloudRunUrl)}</code>
-                          </>
-                        ) : null}
-                      </p>
-                    ) : (
-                      <p>
-                        Selected runtime: <code>{selectedLocalAgent.name}</code> at{" "}
-                        <code>{displaySafeUrl(selectedLocalAgent.base_url)}</code>
-                      </p>
-                    )}
+                    <p>
+                      Source runtime: <code>{selectedLocalAgent.name}</code> at{" "}
+                      <code>{displaySafeUrl(selectedLocalAgent.base_url)}</code>
+                    </p>
                   </div>
                 ) : null}
                 <label>
@@ -2575,14 +2542,86 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  {guideRunTarget === "cloud_run" ? "Preferred local dev port" : "Preferred port"}
+                  Preferred port
                   <input
                     value={createAgentForm.preferred_port}
                     onChange={(event) => updateCreateAgentForm("preferred_port", event.target.value)}
                     placeholder="8085"
                   />
                 </label>
-                {guideRunTarget === "cloud_run" ? (
+                <div className="actions split-actions">
+                  <button onClick={createLocalAgent} disabled={localAgentLoading}>
+                    {localAgentLoading ? "Creating..." : "Create source agent"}
+                  </button>
+                  <button className="secondary" onClick={() => setActiveView("skills")}>
+                    Load skills
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() => {
+                      setActiveView("agent");
+                    }}
+                  >
+                    Open agent card
+                  </button>
+                </div>
+                {localAgentNotice ? <div className="reply">{localAgentNotice}</div> : null}
+                {localAgentError ? <div className="error">{localAgentError}</div> : null}
+              </div>
+            </section>
+
+            <section className="panel span-two">
+              <div className="guide-step">
+                <div className="step-header">
+                  <span className="step-index">2</span>
+                  <div>
+                    <h4>Deploy target</h4>
+                    <p className="muted">
+                      Keep the source on this host for local testing, or prepare a Cloud Run deployment for pull-based runtime.
+                    </p>
+                  </div>
+                </div>
+                <div className="run-target-toggle" role="radiogroup" aria-label="Run target">
+                  <button
+                    type="button"
+                    className={`run-target-button ${guideRunTarget === "local" ? "active" : ""}`}
+                    onClick={() => setGuideRunTarget("local")}
+                  >
+                    <strong>Local Agent</strong>
+                    <span>Use the source runtime directly from this Dev Board host.</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`run-target-button ${guideRunTarget === "cloud_run" ? "active" : ""}`}
+                    onClick={() => {
+                      setGuideRunTarget("cloud_run");
+                      void refreshCloudRunStatus();
+                      void refreshCloudRunDeployments();
+                    }}
+                  >
+                    <strong>Google Cloud Run</strong>
+                    <span>Build the selected source into a public Cloud Run service.</span>
+                  </button>
+                </div>
+
+                {guideRunTarget === "local" ? (
+                  <div className="guide-target-panel">
+                    <div className="kv-list compact-kv">
+                      <div>
+                        <span>Selected source</span>
+                        <strong>{textValue(selectedLocalAgent?.label, "create an agent source first")}</strong>
+                      </div>
+                      <div>
+                        <span>Local URL</span>
+                        <strong>{displaySafeUrl(textValue(selectedLocalAgent?.base_url), "not running")}</strong>
+                      </div>
+                      <div>
+                        <span>Runtime status</span>
+                        <strong>{textValue(selectedAgentEntry?.status, "offline")}</strong>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
                   <div className="guide-cloud-run-panel">
                     <div className="section-heading compact-heading">
                       <div>
@@ -2600,6 +2639,9 @@ export default function App() {
                       <span className={`chip tone-${cloudRunStatus?.docker?.installed ? "success" : "warn"}`}>
                         {cloudRunStatus?.docker?.installed ? "docker available" : "docker missing"}
                       </span>
+                      <span className={`chip ${claimInstalled ? "tone-success" : "tone-warn"}`}>
+                        {claimInstalled ? "claim ready" : "claim needed before deploy"}
+                      </span>
                     </div>
                     <div className="kv-list compact-kv">
                       <div>
@@ -2609,6 +2651,10 @@ export default function App() {
                       <div>
                         <span>Cloud Run project</span>
                         <strong>{textValue(cloudRunForm.project, textValue(cloudRunStatus?.defaults?.project, "not set"))}</strong>
+                      </div>
+                      <div>
+                        <span>Deployment</span>
+                        <strong>{textValue(displayedCloudRunDeployment?.status, "not deployed")}</strong>
                       </div>
                     </div>
                     {!cloudRunStatus?.gcloud?.authenticated ? (
@@ -2719,6 +2765,26 @@ export default function App() {
                       />
                       Skip Cloud Scheduler
                     </label>
+                    <div className="actions split-actions">
+                      <button
+                        className="secondary"
+                        onClick={() => deployCloudRun(true)}
+                        disabled={cloudRunDeploying || !selectedLocalAgent}
+                      >
+                        Dry run Cloud Run
+                      </button>
+                      <button
+                        onClick={() => deployCloudRun(false)}
+                        disabled={cloudRunDeploying || !selectedLocalAgent || !claimInstalled || !cloudRunStatus?.gcloud?.authenticated}
+                      >
+                        {cloudRunDeploying ? "Starting..." : "Deploy to Cloud Run"}
+                      </button>
+                      {cloudRunCurrentJob && ["queued", "running"].includes(textValue(cloudRunCurrentJob.status)) ? (
+                        <button className="secondary" onClick={cancelCloudRunDeployment}>
+                          Cancel deploy
+                        </button>
+                      ) : null}
+                    </div>
                     {displayedCloudRunDeployment ? (
                       <div className="reply compact-reply">
                         <strong>{displayedCloudRunDeployment.service_name}</strong>
@@ -2733,46 +2799,22 @@ export default function App() {
                         </p>
                       </div>
                     ) : null}
+                    {cloudRunError ? <div className="error">{cloudRunError}</div> : null}
+                    {cloudRunStatus?.errors?.length ? (
+                      <div className="error">
+                        <strong>Cloud Run preflight</strong>
+                        <p>{cloudRunStatus.errors.join(" ")}</p>
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
-                <div className="actions split-actions">
-                  <button onClick={createLocalAgent} disabled={localAgentLoading}>
-                    {localAgentLoading
-                      ? "Creating..."
-                      : guideRunTarget === "cloud_run"
-                        ? "1. Create source agent"
-                        : "Create local agent"}
-                  </button>
-                  {guideRunTarget === "cloud_run" ? (
-                    <button
-                      className="secondary"
-                      onClick={() => deployCloudRun(true)}
-                      disabled={cloudRunDeploying || !selectedLocalAgent}
-                    >
-                      Dry run build
-                    </button>
-                  ) : null}
-                  <button
-                    className="secondary"
-                    onClick={() => {
-                      if (guideRunTarget === "cloud_run") {
-                        setAgentCardTab("cloud-run");
-                      }
-                      setActiveView("agent");
-                    }}
-                  >
-                    Open agent card
-                  </button>
-                </div>
-                {localAgentNotice ? <div className="reply">{localAgentNotice}</div> : null}
-                {localAgentError ? <div className="error">{localAgentError}</div> : null}
+                )}
               </div>
             </section>
 
             <section className="panel">
               <div className="guide-step">
                 <div className="step-header">
-                  <span className="step-index">2</span>
+                  <span className="step-index">3</span>
                   <div>
                     <h4>Log in as a developer</h4>
                     <p className="muted">
@@ -2809,9 +2851,9 @@ export default function App() {
             <section className="panel">
               <div className="guide-step">
                 <div className="step-header">
-                  <span className="step-index">3</span>
+                  <span className="step-index">4</span>
                   <div>
-                    <h4>Install the Foundry claim</h4>
+                    <h4>Foundry onboarding</h4>
                     <p className="muted">
                       This requests a bootstrap ticket, applies the discovery claim to the selected agent, and forces a new
                       discover so Foundry sees the developer-linked runtime.
@@ -2857,21 +2899,13 @@ export default function App() {
                     {ticketLoading ? "Requesting..." : "Request bootstrap ticket"}
                   </button>
                   {guideRunTarget === "cloud_run" ? (
-                    <>
-                      <button
-                        className="secondary"
-                        onClick={() => deployCloudRun(true)}
-                        disabled={cloudRunDeploying || !selectedLocalAgent}
-                      >
-                        Dry run Cloud Run
-                      </button>
-                      <button
-                        onClick={() => deployCloudRun(false)}
-                        disabled={cloudRunDeploying || !selectedLocalAgent || !claimInstalled || !cloudRunStatus?.gcloud?.authenticated}
-                      >
-                        {cloudRunDeploying ? "Starting..." : "Deploy claimed source"}
-                      </button>
-                    </>
+                    <button
+                      className="secondary"
+                      onClick={() => deployCloudRun(false)}
+                      disabled={cloudRunDeploying || !selectedLocalAgent || !claimInstalled || !cloudRunStatus?.gcloud?.authenticated}
+                    >
+                      {cloudRunDeploying ? "Starting..." : "Deploy to Cloud Run"}
+                    </button>
                   ) : null}
                 </div>
                 {ticketError ? <div className="error">{ticketError}</div> : null}
@@ -2881,7 +2915,7 @@ export default function App() {
             <section className="panel">
               <div className="guide-step">
                 <div className="step-header">
-                  <span className="step-index">4</span>
+                  <span className="step-index">5</span>
                   <div>
                     <h4>Wait for Foundry onboarding</h4>
                     <p className="muted">
@@ -2928,48 +2962,115 @@ export default function App() {
             <section className="panel">
               <div className="guide-step">
                 <div className="step-header">
-                  <span className="step-index">5</span>
+                  <span className="step-index">6</span>
                   <div>
-                    <h4>Run a playground smoke test</h4>
+                    <h4>{guideRunTarget === "cloud_run" ? "Run Cloud Run smoke test" : "Run playground smoke test"}</h4>
                     <p className="muted">
-                      Once the agent is online, jump into the playground with a starter prompt and confirm the full loop is
-                      working from Foundry bootstrap through live chat.
+                      {guideRunTarget === "cloud_run"
+                        ? "Cloud Run uses pull transport, so Dev Board checks the deployment, Scheduler, and the latest poll."
+                        : "Once the agent is online, jump into the playground with a starter prompt and confirm the chat loop."}
                     </p>
                   </div>
                 </div>
-                <div className="kv-list compact-kv">
-                  <div>
-                    <span>Agent runtime</span>
-                    <strong>{textValue(selectedAgentEntry?.status, "offline")}</strong>
-                  </div>
-                  <div>
-                    <span>Gateway credentials</span>
-                    <strong>{gatewayReady ? "ready" : "not observed yet"}</strong>
-                  </div>
-                  <div>
-                    <span>Conversation started</span>
-                    <strong>{hasConversation ? "yes" : "no"}</strong>
-                  </div>
-                </div>
-                <div className="actions split-actions">
-                  <button onClick={openPlaygroundWithStarterMessage} disabled={!playgroundReady}>
-                    Open playground with starter prompt
-                  </button>
-                  <button className="secondary" onClick={() => setActiveView("agent")} disabled={!selectedAgent}>
-                    Open agent card
-                  </button>
-                </div>
+                {guideRunTarget === "cloud_run" ? (
+                  <>
+                    <div className="kv-list compact-kv">
+                      <div>
+                        <span>Deployment</span>
+                        <strong>{textValue(displayedCloudRunDeployment?.status, "not deployed")}</strong>
+                      </div>
+                      <div>
+                        <span>Service URL</span>
+                        <strong>{displaySafeUrl(textValue(displayedCloudRunDeployment?.result?.service_url), "pending")}</strong>
+                      </div>
+                      <div>
+                        <span>Scheduler</span>
+                        <strong>
+                          {textValue(
+                            displayedCloudRunDeployment?.result?.scheduler_job,
+                            cloudRunForm.skip_scheduler ? "skipped" : "not observed",
+                          )}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>Last poll</span>
+                        <strong>{textValue(bootstrapState.last_polled_at, "not observed")}</strong>
+                      </div>
+                      <div>
+                        <span>Poll endpoint</span>
+                        <strong>{displaySafeUrl(textValue(displayedCloudRunDeployment?.result?.poll_url), "pending")}</strong>
+                      </div>
+                    </div>
+                    {smokeObserved ? (
+                      <div className="reply compact-reply">
+                        <strong>Cloud Run poll observed</strong>
+                        <p>Deployment succeeded and the agent has reported a recent poll through the Foundry bootstrap state.</p>
+                      </div>
+                    ) : (
+                      <p className="muted">
+                        Waiting for a successful deployment and at least one poll from the Cloud Run runtime.
+                      </p>
+                    )}
+                    <div className="actions split-actions">
+                      <button
+                        className="secondary"
+                        onClick={() => {
+                          if (displayedCloudRunDeployment?.id) {
+                            void refreshCloudRunDeployment(displayedCloudRunDeployment.id);
+                          } else {
+                            void refreshCloudRunDeployments();
+                          }
+                        }}
+                      >
+                        Refresh Cloud Run job
+                      </button>
+                      <button className="secondary" onClick={() => probeHandshake()} disabled={handshakeLoading || !selectedAgent}>
+                        {handshakeLoading ? "Refreshing flow..." : "Refresh flow"}
+                      </button>
+                      {displayedCloudRunDeployment?.result?.service_url ? (
+                        <a className="link-button" href={displayedCloudRunDeployment.result.service_url} target="_blank" rel="noreferrer">
+                          Open service
+                        </a>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="kv-list compact-kv">
+                      <div>
+                        <span>Agent runtime</span>
+                        <strong>{textValue(selectedAgentEntry?.status, "offline")}</strong>
+                      </div>
+                      <div>
+                        <span>Gateway credentials</span>
+                        <strong>{gatewayReady ? "ready" : "not observed yet"}</strong>
+                      </div>
+                      <div>
+                        <span>Conversation started</span>
+                        <strong>{hasConversation ? "yes" : "no"}</strong>
+                      </div>
+                    </div>
+                    <div className="actions split-actions">
+                      <button onClick={openPlaygroundWithStarterMessage} disabled={!playgroundReady}>
+                        Open playground with starter prompt
+                      </button>
+                      <button className="secondary" onClick={() => setActiveView("agent")} disabled={!selectedAgent}>
+                        Open agent card
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </section>
 
             <section className="panel">
               <div className="guide-step">
                 <div className="step-header">
-                  <span className="step-index">6</span>
+                  <span className="step-index">7</span>
                   <div>
                     <h4>Test the agent in Foundry</h4>
                     <p className="muted">
-                      Use the same Foundry target as step 2, or switch it here before you open <code>{foundryPortalUrl}</code>{" "}
+                      Use the same Foundry target as the GitHub login, or switch it here before you open <code>{foundryPortalUrl}</code>{" "}
                       to validate the same agent inside the live Foundry product after bootstrap is approved.
                     </p>
                   </div>
@@ -2986,7 +3087,7 @@ export default function App() {
                   </div>
                   <div>
                     <span>Browser session</span>
-                    <strong>{foundryBrowserSessionReady ? "ready from step 2" : "sign in required"}</strong>
+                    <strong>{foundryBrowserSessionReady ? "ready from step 3" : "sign in required"}</strong>
                   </div>
                   <div>
                     <span>Agent approval</span>
@@ -2997,7 +3098,7 @@ export default function App() {
                   <strong>{foundryBrowserSessionReady ? "You can likely go straight in" : "GitHub login is required"}</strong>
                   <p>
                     {foundryBrowserSessionReady
-                      ? "If you completed the GitHub popup login in step 2 in this browser, Foundry will usually open with that session already available. If it still asks you to sign in, continue with GitHub there."
+                      ? "If you completed the GitHub popup login in step 3 in this browser, Foundry will usually open with that session already available. If it still asks you to sign in, continue with GitHub there."
                       : "Foundry uses GitHub login for this flow. If you have not signed in through the popup earlier on this page, Foundry will ask you to continue with GitHub before you can test the agent."}
                   </p>
                 </div>

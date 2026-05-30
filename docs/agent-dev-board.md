@@ -66,7 +66,17 @@ If an existing agent was created before a resource-bearing skill copied its reso
 
 ## Cloud Run Deployment
 
-The guided setup flow has a first-step run target selector for `Local Agent` vs `Google Cloud Run`. Selecting `Google Cloud Run` keeps the template/source workspace flow in the same place, then shows Cloud Run preflight, project/region settings, dry-run, and real deploy controls.
+The guided setup flow separates the agent source from the runtime target:
+
+1. Create an agent source from a template, with an optional `Load skills` jump to Skill Store
+2. Choose the deploy target: `Local Agent` or `Google Cloud Run`
+3. Log in to Foundry with GitHub
+4. Request the Foundry bootstrap claim
+5. Wait for Foundry onboarding
+6. Run the appropriate smoke test
+7. Open Foundry to test the linked agent
+
+When `Google Cloud Run` is selected, step 2 shows Cloud Run preflight, Google Cloud login, project/region settings, dry-run, and deploy controls. The real deploy is intentionally gated until the Foundry claim is installed so the Cloud Run image contains the agent's current claimed source workspace. The Cloud Run smoke test checks deployment status, Scheduler, and the latest bootstrap poll instead of using the local playground chat path.
 
 The `Agent card -> Cloud Run` tab exposes the same headless Cloud Run deploy flow from [Cloud Run Deployment](cloud-run-deployment.md). It checks local `gcloud` / Docker status, shows the active Google account and project, and starts an asynchronous deployment job for the selected agent.
 

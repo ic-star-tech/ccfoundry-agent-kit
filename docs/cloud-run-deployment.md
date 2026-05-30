@@ -71,16 +71,18 @@ This will:
 
 The Dev Board UI exposes the same deploy path in two places:
 
-- `Guided setup -> Create agent -> Run target -> Google Cloud Run`
+- `Guided setup -> Create agent source -> Deploy target -> Google Cloud Run`
 - `Agent card -> Cloud Run`
 
 Use it after creating an agent source workspace from a template. The UI will:
 
 1. Check whether `gcloud` and Docker are available on the Dev Board API host
 2. Show the active Google account, project, and region
-3. Show `gcloud auth login` when no active Google account is detected
+3. Provide a `Google Cloud login` no-browser flow when no active Google account is detected
 4. Let you run a dry-run deployment for the selected agent
-5. Start the real deploy script asynchronously and stream job logs into the panel
+5. Enable the real deploy after the Foundry bootstrap claim is installed
+6. Start the real deploy script asynchronously and stream job logs into the panel
+7. Smoke-test Cloud Run by checking deployment status, Scheduler, and the latest bootstrap poll
 
 The UI uses the selected agent instance directory as the `--agent-space` input, so installed Skill Store resources are included in the Cloud Run image. If `gcloud` is not authenticated, use the `Google Cloud login` action in Dev Board or run `gcloud auth login --no-launch-browser` on the machine hosting the Dev Board API, then refresh Cloud Run status. On GCE/GVM, an attached service account also works if it has sufficient Cloud Run, Artifact Registry, and Cloud Scheduler permissions.
 
