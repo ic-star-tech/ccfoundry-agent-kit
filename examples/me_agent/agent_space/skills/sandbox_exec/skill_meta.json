@@ -1,9 +1,0 @@
-{
-  "id": "sandbox_exec",
-  "name": "Sandbox Executor",
-  "version": "1.0.0",
-  "category": "infrastructure",
-  "author": "ccfoundry",
-  "tags": ["sandbox", "docker", "execution", "workspace"],
-  "description": "Execute commands and manage files in a Foundry sandbox workspace."
-}

@@ -1,9 +1,0 @@
-{
-  "id": "verilog_rra",
-  "name": "Verilog RRA Testbench",
-  "version": "1.0.0",
-  "category": "hardware",
-  "author": "ccfoundry",
-  "tags": ["verilog", "RRA", "iverilog", "testbench", "hardware"],
-  "description": "Build and verify Round Robin Arbiter (RRA) testbenches using Icarus Verilog in a Foundry sandbox."
-}
