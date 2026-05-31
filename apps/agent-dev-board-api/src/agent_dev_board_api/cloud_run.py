@@ -43,6 +43,8 @@ def _is_missing_resource_output(*parts: str) -> bool:
         "not found",
         "not_found",
         "notfound",
+        "could not be found",
+        "cannot find",
         "does not exist",
         "could not find",
         "no such",
