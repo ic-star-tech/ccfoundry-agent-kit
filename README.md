@@ -88,9 +88,15 @@ See [Philosophy](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/d
 - [SDK Guide](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/sdk.md) — Building blocks and API reference
 - [Foundry Onboarding](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/foundry-onboarding.md) — Discovery, invite, and approval flow
 - [Protocol (Wire Format)](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/protocol.md) — HTTP contract and SSE events
+- [Security](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/security.md) — Local threat model, CORS, URL handling, and secret hygiene
 - [Non-Goals](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/non-goals.md) — What this repo intentionally excludes
 - [Agent Dev Board](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/agent-dev-board.md) — Local dev UI guide
 - [Cloud Run Deployment](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/cloud-run-deployment.md) — Deploy agents to Google Cloud Run
+
+## Contributing And Security
+
+- [Contributing](CONTRIBUTING.md) — Development setup, checks, and pull request hygiene
+- [Security Policy](SECURITY.md) — Vulnerability reporting and supported security posture
 
 ## License
 

@@ -17,6 +17,18 @@ It currently handles:
 
 The package and import path are named `agent-dev-board-api` / `agent_dev_board_api` to match the product surface in this repository.
 
+## Local Security Defaults
+
+The API is a privileged local development service. It defaults to localhost-only CORS and expects remote Foundry URLs to use HTTPS. Plain HTTP to non-loopback Foundry hosts requires `CCFOUNDRY_ALLOW_INSECURE_REMOTE_HTTP=true`. Automatically discovered GitHub tokens are forwarded only to trusted Foundry hosts; custom hosts require an explicit token or `CCFOUNDRY_TRUSTED_FOUNDRY_HOSTS`.
+
+For LAN browser testing, pin the allowed origin explicitly:
+
+```bash
+CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGINS=http://192.168.1.10:3000
+```
+
+See [`docs/security.md`](../../docs/security.md) for the full threat model.
+
 ## Skill Store Resource Files
 
 `SkillStore.install_skill()` writes the installed skill into the selected agent instance under `agent_space/skills/<skill_id>/`. Built-in skills can declare resource source directories; the installer copies companion files alongside `SKILL.md` and `skill_meta.json`.

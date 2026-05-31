@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install packages
+        run: |
+          python -m pip install -U pip pytest
+          python -m pip install -e packages/python-sdk
+          python -m pip install -e apps/agent-dev-board-api
+      - name: Run Python tests
+        run: |
+          python -m pytest packages/python-sdk/tests apps/agent-dev-board-api/tests
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/agent-dev-board-web/package-lock.json
+      - name: Install web dependencies
+        working-directory: apps/agent-dev-board-web
+        run: npm ci
+      - name: Audit web dependencies
+        working-directory: apps/agent-dev-board-web
+        run: npm audit --audit-level=moderate
+      - name: Build web
+        working-directory: apps/agent-dev-board-web
+        run: npm run build

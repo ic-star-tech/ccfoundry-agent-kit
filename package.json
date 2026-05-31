@@ -25,6 +25,8 @@
   },
   "files": [
     "README.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
     "LICENSE",
     "Dockerfile.cloudrun",
     "scripts/dev-board.mjs",
@@ -37,7 +39,6 @@
     "examples/me_agent/pyproject.toml",
     "examples/me_agent/agent_space/",
     "examples/me_agent/src/me_agent_example/",
-    "apps/agent-dev-board-api/agents.yaml",
     "apps/agent-dev-board-api/pyproject.toml",
     "apps/agent-dev-board-api/README.md",
     "apps/agent-dev-board-api/src/agent_dev_board_api/",
@@ -48,8 +49,9 @@
     "apps/agent-dev-board-web/vite.config.ts",
     "apps/agent-dev-board-web/public/brand/",
     "apps/agent-dev-board-web/src/",
-    "docs/cloud-run-deployment.md",
+    "docs/*.md",
     "docs/assets/readme-agent-dev-board-banner.svg",
+    "schemas/",
     "!**/__pycache__/**",
     "!**/*.pyc"
   ],

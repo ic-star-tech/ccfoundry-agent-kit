@@ -92,6 +92,20 @@ function fail(message) {
   process.exit(1);
 }
 
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function defaultCorsOriginRegex(targetHost) {
+  if (["127.0.0.1", "localhost", "::1"].includes(targetHost)) {
+    return "";
+  }
+  if (targetHost === "0.0.0.0") {
+    return "^https?://(localhost|127(?:\\.[0-9]{1,3}){3}|10(?:\\.[0-9]{1,3}){3}|192\\.168(?:\\.[0-9]{1,3}){2}|172\\.(1[6-9]|2[0-9]|3[0-1])(?:\\.[0-9]{1,3}){2}|\\[::1\\])(:[0-9]+)?$";
+  }
+  return `^https?://${escapeRegex(targetHost)}(:[0-9]+)?$`;
+}
+
 function runCapture(command, commandArgs, options = {}) {
   return spawnSync(command, commandArgs, {
     cwd: workspaceRoot,
@@ -372,6 +386,13 @@ async function main() {
   reserved.add(apiPort);
   const webPort = await pickPort("Web", host, requestedWebPort, reserved);
   reserved.add(webPort);
+  const corsOriginRegex = defaultCorsOriginRegex(host);
+  const hasCorsOverride =
+    process.env.CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGINS ||
+    process.env.CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGIN_REGEX;
+  const corsEnv = hasCorsOverride || !corsOriginRegex
+    ? {}
+    : { CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGIN_REGEX: corsOriginRegex };
 
   log("Starting Agent Dev Board stack");
   log(`API:   http://${host}:${apiPort}`);
@@ -399,6 +420,7 @@ async function main() {
       {
         env: {
           ...process.env,
+          ...corsEnv,
           CCFOUNDRY_AGENTS_FILE: runtimeAgentsFile,
           CCFOUNDRY_DEV_VENV_PYTHON: venvPython,
         },

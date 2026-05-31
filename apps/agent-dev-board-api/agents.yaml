@@ -1,13 +1,1 @@
-agents:
-- name: test_verilog_agent
-  label: Verilog Test Agent
-  base_url: http://127.0.0.1:8085
-- name: my_verilog_bot
-  label: My Verilog Bot
-  base_url: http://127.0.0.1:8086
-- name: verilog_agent
-  label: Write Verilog modules.
-  base_url: http://127.0.0.1:8087
-- name: verilog_module_writer
-  label: Agent that write industry standard Veirlog modules
-  base_url: http://127.0.0.1:8088
+agents: []

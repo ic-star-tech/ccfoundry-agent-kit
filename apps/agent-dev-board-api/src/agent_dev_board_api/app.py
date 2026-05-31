@@ -8,7 +8,7 @@ import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 import yaml
@@ -31,6 +31,45 @@ VENV_PYTHON = Path(os.getenv("CCFOUNDRY_DEV_VENV_PYTHON", str(REPO_ROOT / ".venv
 TRANSCRIPTS: dict[str, list[dict[str, str]]] = {}
 logger = logging.getLogger(__name__)
 SKILL_STORE = SkillStore()
+
+
+_LOCALHOST_ORIGIN_RE = r"^https?://(localhost|127(?:\.[0-9]{1,3}){3}|\[::1\])(:[0-9]+)?$"
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_DEFAULT_TRUSTED_FOUNDRY_HOSTS = {"foundry.cochiper.com", "foundry.cochiper.ai"}
+
+
+def _env_truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_csv(name: str) -> list[str]:
+    return [item.strip() for item in os.getenv(name, "").split(",") if item.strip()]
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    normalized = str(host or "").strip().strip("[]").lower()
+    if normalized in _LOOPBACK_HOSTS:
+        return True
+    return normalized.startswith("127.")
+
+
+def _default_url_scheme(value: str) -> str:
+    netloc = value.split("/", 1)[0].split("@")[-1]
+    host = netloc.rsplit(":", 1)[0].strip("[]")
+    return "http" if _is_loopback_host(host) else "https"
+
+
+def _cors_allowed_origins() -> list[str]:
+    return _env_csv("CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGINS")
+
+
+def _cors_allowed_origin_regex() -> str | None:
+    explicit_regex = os.getenv("CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGIN_REGEX", "").strip()
+    if explicit_regex:
+        return explicit_regex
+    if _cors_allowed_origins():
+        return None
+    return _LOCALHOST_ORIGIN_RE
 
 
 class LiteAgentConfig(BaseModel):
@@ -191,8 +230,51 @@ def _normalize_url(raw_url: str) -> str:
     if not value:
         return ""
     if "://" not in value:
-        value = f"http://{value}"
+        if ":" in value and not value.split(":", 1)[1].split("/", 1)[0].isdigit():
+            return ""
+        value = f"{_default_url_scheme(value)}://{value}"
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    if (
+        parsed.scheme == "http"
+        and not _is_loopback_host(parsed.hostname)
+        and not _env_truthy("CCFOUNDRY_ALLOW_INSECURE_REMOTE_HTTP")
+    ):
+        return ""
+    return value.rstrip("/")
+
+
+def _normalize_local_agent_url(raw_url: str) -> str:
+    value = _normalize_url(raw_url)
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme != "http" or not _is_loopback_host(parsed.hostname):
+        return ""
     return value
+
+
+def _trusted_foundry_hosts() -> set[str]:
+    return {
+        item.lower()
+        for item in [*_DEFAULT_TRUSTED_FOUNDRY_HOSTS, *_env_csv("CCFOUNDRY_TRUSTED_FOUNDRY_HOSTS")]
+        if item
+    }
+
+
+def _is_trusted_foundry_url(foundry_url: str) -> bool:
+    parsed = urlparse(foundry_url)
+    host = str(parsed.hostname or "").strip().lower()
+    return host in _trusted_foundry_hosts()
+
+
+def _discover_github_token_for_foundry(explicit_token: str, foundry_url: str) -> tuple[str, str]:
+    if str(explicit_token or "").strip():
+        return _discover_github_token(explicit_token)
+    if _is_trusted_foundry_url(foundry_url):
+        return _discover_github_token("")
+    return "", "custom_foundry_requires_explicit_token"
 
 
 def _run_command(args: list[str], *, cwd: Path | None = None) -> str:
@@ -618,8 +700,9 @@ def _handshake_checks(
 app = FastAPI(title="Foundry-lite API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_allowed_origins(),
+    allow_origin_regex=_cors_allowed_origin_regex(),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1060,7 +1143,10 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
         raise HTTPException(status_code=400, detail="Foundry URL is required")
 
     git_context = _git_context()
-    github_token, github_token_source = _discover_github_token(request.github_token)
+    github_token, github_token_source = _discover_github_token_for_foundry(
+        request.github_token,
+        normalized_foundry_url,
+    )
     github_identity = await _github_identity(github_token)
     github_identity["token_source"] = github_token_source
     github_identity["has_token"] = bool(github_token)
@@ -1378,7 +1464,10 @@ async def list_foundry_jobs(request: FoundryJobsRequest) -> dict[str, Any]:
     if not normalized_foundry_url:
         raise HTTPException(status_code=400, detail="Foundry URL is required")
 
-    github_token, _token_source = _discover_github_token(request.github_token)
+    github_token, _token_source = _discover_github_token_for_foundry(
+        request.github_token,
+        normalized_foundry_url,
+    )
     auth_token = request.foundry_token.strip() if request.foundry_token.strip() else github_token
     headers: dict[str, str] = {
         "Accept": "application/json",
@@ -1448,7 +1537,10 @@ async def claim_foundry_job(job_id: str, request: FoundryJobClaimRequest) -> dic
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    github_token, _token_source = _discover_github_token(request.github_token)
+    github_token, _token_source = _discover_github_token_for_foundry(
+        request.github_token,
+        normalized_foundry_url,
+    )
     auth_token = request.foundry_token.strip() if request.foundry_token.strip() else github_token
     headers: dict[str, str] = {
         "Accept": "application/json",
@@ -1529,14 +1621,17 @@ class BountyExecuteRequest(BaseModel):
 @app.post("/api/bounty/scan")
 async def proxy_bounty_scan(request: BountyScanRequest) -> dict[str, Any]:
     """Proxy: ask an agent to scan Foundry for matching jobs."""
-    agent_url = request.agent_url.rstrip("/")
+    agent_url = _normalize_local_agent_url(request.agent_url)
     if not agent_url:
-        raise HTTPException(status_code=400, detail="agent_url is required")
+        raise HTTPException(status_code=400, detail="agent_url must be a loopback http URL")
+    foundry_url = _normalize_url(request.foundry_url)
+    if request.foundry_url and not foundry_url:
+        raise HTTPException(status_code=400, detail="foundry_url must be http(s); remote http requires opt-in")
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{agent_url}/bounty/scan",
-                json={"foundry_url": request.foundry_url},
+                json={"foundry_url": foundry_url},
             )
             return resp.json()
     except Exception as exc:
@@ -1546,15 +1641,18 @@ async def proxy_bounty_scan(request: BountyScanRequest) -> dict[str, Any]:
 @app.post("/api/bounty/execute")
 async def proxy_bounty_execute(request: BountyExecuteRequest) -> dict[str, Any]:
     """Proxy: ask an agent to execute a bounty task."""
-    agent_url = request.agent_url.rstrip("/")
+    agent_url = _normalize_local_agent_url(request.agent_url)
     if not agent_url:
-        raise HTTPException(status_code=400, detail="agent_url is required")
+        raise HTTPException(status_code=400, detail="agent_url must be a loopback http URL")
+    foundry_url = _normalize_url(request.foundry_url)
+    if request.foundry_url and not foundry_url:
+        raise HTTPException(status_code=400, detail="foundry_url must be http(s); remote http requires opt-in")
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{agent_url}/bounty/execute",
                 json={
-                    "foundry_url": request.foundry_url,
+                    "foundry_url": foundry_url,
                     "job_id": request.job_id,
                     "job_name": request.job_name,
                     "dry_run": request.dry_run,

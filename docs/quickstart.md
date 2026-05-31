@@ -30,6 +30,8 @@ For LAN testing from another device on the same network:
 ccfoundry dev-board --host 0.0.0.0
 ```
 
+LAN mode exposes a privileged local development API to your network. Use it only on trusted networks. If the browser origin is not allowed by the default LAN CORS regex, set `CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGINS` to the exact web origin before starting the board.
+
 `ccfoundry` by itself defaults to `ccfoundry dev-board`, and `ccfoundry agent-dev-board` is accepted as a longer alias.
 
 ## Run From Source
@@ -59,6 +61,8 @@ npm run dev-board:lan
 ```
 
 That uses `0.0.0.0` for the board processes.
+
+The API still keeps CORS restricted. Use `CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGINS=http://<host>:<web-port>` or `CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGIN_REGEX=...` when you need to allow a specific LAN browser origin.
 
 ## First run inside the browser
 
@@ -135,6 +139,8 @@ What the board is good for:
 - Foundry handshake probes
 - developer bootstrap ticket requests
 - local git and GitHub context inspection
+
+See [Security](security.md) for the local threat model and hardening options.
 
 ## Optional: Connect To A Modern Foundry
 

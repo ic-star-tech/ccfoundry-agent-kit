@@ -35,6 +35,12 @@ For LAN access:
 npm run dev-board:lan
 ```
 
+LAN mode is intended for trusted development networks only. The API can start local processes, proxy agent requests, request bootstrap tickets, and launch Cloud Run jobs. By default, API CORS allows localhost origins; the launcher widens this only for explicit LAN mode. To pin allowed origins yourself, set:
+
+```bash
+CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGINS=http://192.168.1.10:3000
+```
+
 Its purpose is to make agent-side development and Foundry bootstrap debugging easy:
 
 - create and manage local agents
@@ -148,6 +154,12 @@ In the current browser flow, GitHub is the only supported developer sign-in meth
 - full Foundry admin surface
 
 Those remain part of the Foundry control plane.
+
+## Security Notes
+
+Agent Dev Board is a local harness, not a production service. Keep the default loopback binding for normal work. Remote Foundry URLs should use HTTPS; non-loopback plain HTTP requires `CCFOUNDRY_ALLOW_INSECURE_REMOTE_HTTP=true`. Bounty proxy endpoints only forward to loopback HTTP agent URLs.
+
+See [Security](security.md) for the full threat model and pre-publish checklist.
 
 See also:
 
