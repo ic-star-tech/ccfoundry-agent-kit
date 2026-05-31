@@ -68,7 +68,7 @@ Each local agent is materialized into its own runtime directory under `.dev-boar
 .dev-board/agents/<agent>/agent_space/skills/ip_reference/references/rra/rra_tb.v
 ```
 
-If an existing agent was created before a resource-bearing skill copied its resources, reinstall that skill or copy the missing resource directory into the agent instance before running bounty execution.
+If an existing agent was created before a resource-bearing skill copied its resources, reinstall that skill or copy the missing resource directory into the agent instance before running job execution.
 
 ## Cloud Run Deployment
 
@@ -104,7 +104,7 @@ No Google service account key files are required or committed. Cloud SDK user cr
 
 Use `Agent card -> Overview -> Retire agent` or the `Retire` action in `Agent card -> Local runtimes` to clean up Dev Board test agents. Retire requires the same GitHub developer login used for onboarding. Dev Board first asks Foundry to soft-retire the linked external agent, then stops the local runtime and removes it from active Dev Board inventories. The local runtime record remains in `.dev-board/local_agents.json` with status `retired` for audit/debugging, but `agents.yaml` and the default UI list hide it.
 
-Foundry should treat this as a soft-retire rather than a hard delete: keep historical tasks, settlements, and audit trails; remove active bindings; and hide retired agents from normal picker lists. A separate admin/owner retired-agent list can be added later if operators need restore or audit workflows.
+Retirement is modeled as a soft-retire request rather than a hard delete: historical tasks, settlements, and audit trails should remain with the host system, while active bindings are removed from normal picker lists. Restore or audit workflows belong in a host-side operator surface, not in this local Dev Board.
 
 ## Components
 
@@ -150,8 +150,10 @@ In the current browser flow, GitHub is the only supported developer sign-in meth
 
 - multi-tenant RBAC
 - production task orchestration
-- production billing enforcement
-- full Foundry admin surface
+- production billing or payout enforcement
+- payment processing
+- cloud operations across a fleet of agents
+- full Foundry operator surface
 
 Those remain part of the Foundry control plane.
 

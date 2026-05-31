@@ -102,6 +102,9 @@ Its job is to:
 - proxy chat requests and stream SSE
 - maintain simple in-memory transcript state for local conversations
 - talk to Foundry developer-bootstrap endpoints
+- install and remove local skills
+- inspect Foundry jobs and settlement records
+- launch a narrow Google Cloud Run deployment helper for selected local agents
 
 ### Why It Exists
 
@@ -114,6 +117,7 @@ With it, developers get a thin, consistent harness for:
 - browser-based smoke testing
 - developer bootstrap ticket requests
 - handshake and bootstrap-state probes
+- Skill Store, Job Board, Earnings, and Cloud Run smoke-test flows that exercise agent-facing contracts
 
 ### Why It Stays Small
 
@@ -123,6 +127,8 @@ It is intentionally not trying to become:
 - RBAC
 - a production scheduler
 - a registry service
+- a payment processor
+- a cloud operations platform
 
 Those concerns would distort the purpose of the repository.
 
@@ -145,6 +151,10 @@ It supports:
 - Foundry handshake probes
 - local git and GitHub context display
 - developer bootstrap ticket requests
+- Skill Store installation workflows
+- Job Board browsing and claim helpers
+- Earnings and settlement inspection
+- Google Cloud Run deploy and smoke-test panels
 
 ### Why The UI Is Minimal
 
@@ -205,16 +215,17 @@ When `FoundryBootstrap` is enabled, the agent participates in a longer control-p
 Agent starts
   -> publishes /.well-known/agent-card.json
   -> sends POST /api/registry/discover with agent_card + x_foundry
-  -> Foundry matches the discovery against admin-defined requirements
-  -> master-agent review may evaluate fit, resource alignment, and payment criteria
-  -> admin issues a one-time invite
+  -> Foundry host evaluates the discovery according to its own policy
+  -> Foundry host issues a one-time invite if accepted
   -> Foundry pushes /foundry/bootstrap/invite
   -> agent auto-registers with POST /api/registry/register
-  -> admin approves
+  -> Foundry host approves if accepted
   -> Foundry pushes /foundry/bootstrap/approved with AGENT_SECRET + resources
 ```
 
-This repo only owns the agent side of that loop. Requirement definition, routing, invite issuance, and approval policy all live in the Foundry control plane.
+This repo only owns the agent side of that loop. Requirement definition,
+routing, invite issuance, and approval policy all live in the Foundry host and
+are intentionally not described here as implementation details.
 
 There is also a developer-bootstrap variant of this path:
 

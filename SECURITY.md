@@ -22,7 +22,7 @@ We will acknowledge reports as quickly as possible, triage severity, and publish
 - LAN access is an explicit development mode and should be used only on trusted networks.
 - Remote Foundry URLs should use HTTPS. Plain HTTP for non-loopback hosts requires the explicit `CCFOUNDRY_ALLOW_INSECURE_REMOTE_HTTP=true` opt-in.
 - Automatically discovered host GitHub tokens are forwarded only to trusted Foundry hosts. Custom Foundry hosts require an explicit token or `CCFOUNDRY_TRUSTED_FOUNDRY_HOSTS`.
-- Agent bounty proxy endpoints only forward to loopback HTTP agent URLs.
+- Agent job proxy endpoints only forward to loopback HTTP agent URLs.
 - Native PTY access is disabled by default and requires both `terminal_provider=agent_native` and the `terminal` workspace feature.
 
 See [docs/security.md](docs/security.md) for the full local threat model and hardening checklist.

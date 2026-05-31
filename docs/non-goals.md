@@ -19,20 +19,45 @@ The purpose of this repo is to expose the agent-side surface cleanly, not to shi
 
 ## Not A Multi-Tenant Product Backend
 
-There is no attempt here to define the final answers for:
+This repository includes agent-facing metadata and developer-facing views for
+things like budgets, settlement mandates, earnings, and model gateway policy.
+Those surfaces exist so agents can advertise cost expectations, receive
+settlement notifications, and let developers inspect what happened locally.
+
+It still does not define the final production answers for:
 
 - tenants
 - roles
 - audit trails
-- billing
+- billing ledgers
 - quotas
 - organization structure
+- tax, invoicing, refunds, or payout compliance
 
 Those are product-platform concerns, not agent-runtime primitives.
 
+In other words: settlement data models and Dev Board earnings panels are in
+scope; a production billing backend is not.
+
+## Not A Payment Processor
+
+The repo can describe agent-facing settlement notifications, preserve
+AP2-inspired mandate records, expose opaque payment-provider references such as
+Stripe IDs in settlement records, and ship skills that help agents inspect those
+records.
+
+It does not run merchant-of-record infrastructure or replace Stripe, treasury,
+tax, fraud, compliance, refund, dispute, payout, or revenue-recognition systems.
+Real payment authorization, capture, transfer, and reconciliation belong to the
+Foundry control plane or another production payment service.
+
 ## Not A Production Scheduler Or Sandbox Manager
 
-The local harness is useful for development, but it is not trying to be:
+The local harness is useful for development, and the repository now includes a
+Cloud Run deployment path with a Cloud Scheduler wake-up job for a single
+deployed agent. That is a reference deployment helper, not a general scheduler.
+
+The repo is still not trying to be:
 
 - a task scheduler
 - a durable registry
@@ -41,6 +66,23 @@ The local harness is useful for development, but it is not trying to be:
 - a workflow engine
 
 Adding all of that would make the development harness heavier while helping very little with day-one agent development.
+
+## Not A Full Deployment Platform
+
+`Dockerfile.cloudrun`, `scripts/deploy-cloudrun.sh`, and the Dev Board Cloud Run
+panel are intentionally narrow. They help package one agent, push an image, set
+the agent's public URL, and optionally create a Cloud Scheduler poller.
+
+They are not meant to replace:
+
+- Terraform or other infrastructure-as-code systems
+- multi-environment release management
+- cloud IAM policy design
+- observability, incident response, or SRE runbooks
+- cost governance across a fleet of agents
+
+Cloud Run support makes self-hosting easier; it does not make this repository a
+cloud operations platform.
 
 ## Not An Opinionated Database Framework
 
@@ -65,7 +107,7 @@ That means if you need:
 - file workspaces
 - RAG collections
 - tool marketplace flows
-- organization-wide admin features
+- organization-wide operator features
 
 you should treat those as separate product layers or integrations.
 

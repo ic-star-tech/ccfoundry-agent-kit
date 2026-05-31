@@ -55,7 +55,7 @@ Foundry's role is to connect user needs with agent capabilities:
 1. **Demands** — Users come to Foundry with problems to solve. Foundry routes those problems to agents with matching skills.
 2. **LLM Gateway** — Centralized model access with policy controls, so agents do not each need their own API keys and billing.
 3. **Sandbox Workspaces** — Isolated execution environments for task work. The agent's private state stays separate from the task workspace.
-4. **Discovery and Onboarding** — A structured process for agents to join the ecosystem: discover → review → invite → register → approve.
+4. **Discovery and Onboarding** — A structured process for agents to join the ecosystem: discover → policy check → invite → register → approve.
 5. **Multi-agent Routing** — Users can switch between specialist agents or invoke them inline, each handling its own domain.
 6. **Security and Audit** — Platform-side authentication, authorization, and audit controls that agents do not need to build themselves.
 
@@ -99,7 +99,7 @@ The trust boundary starts with the **manifest system** — the agent explicitly 
 |------------|------------------|
 | `llm.needs_gateway` | Whether to use Foundry's model access or bring its own |
 | `dashboard.soul_visible` | Whether its SOUL.md is visible in Foundry dashboards |
-| `dashboard.soul_editable` | Whether admins can edit its soul |
+| `dashboard.soul_editable` | Whether host-side dashboards may edit its soul |
 | `infra.heartbeat_managed` | Whether it accepts Foundry health monitoring |
 | `mcp.accepts_foundry_mcp` | Whether it is willing to accept Foundry-provided MCP configuration metadata |
 

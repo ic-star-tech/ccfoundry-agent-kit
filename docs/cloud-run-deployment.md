@@ -1,6 +1,11 @@
 # Cloud Run Deployment
 
-Deploy your CCFoundry agent to Google Cloud Run for always-available, serverless operation. Your computer can be turned off — the agent keeps running in the cloud, automatically polling Foundry for bounties and tasks.
+Deploy your CCFoundry agent to Google Cloud Run for always-available, serverless operation. Your computer can be turned off while the agent keeps running in the cloud and polling the configured Foundry host for onboarding and work.
+
+This is a reference deployment helper for self-hosted agents. It packages one
+agent into Cloud Run and optionally creates one Cloud Scheduler poller. It is
+not intended to replace a production cloud platform, release system, or
+fleet-wide operations stack. See [Non-Goals](non-goals.md) for the boundary.
 
 ## Architecture
 
@@ -98,7 +103,7 @@ The Google login flow does not create service account key files in this reposito
 Usage: ./scripts/deploy-cloudrun.sh <agent-name> [options]
 
 Options:
-  --project <id>       GCP project ID  (default: glassy-fort-497911-u3)
+  --project <id>       GCP project ID
   --region <region>    Cloud Run region (default: us-central1)
   --agent-space <path> Path to agent_space directory to deploy
   --min-instances <n>  Minimum instances (default: 0 = scale-to-zero)

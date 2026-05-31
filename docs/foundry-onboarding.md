@@ -6,9 +6,9 @@ The short version is:
 
 - the agent broadcasts who it is and what it wants
 - optionally, a developer claims that discovery through `Agent Dev Board`
-- Foundry evaluates that discovery against its own requirements
-- admin decides whether to invite and approve
-- after approval, Foundry delivers the runtime contract and resources
+- a compatible Foundry host evaluates the discovery according to its own policy
+- the host decides whether to invite and approve the agent
+- after approval, the host delivers the runtime contract and resources
 
 ## Control-plane split
 
@@ -17,11 +17,11 @@ The onboarding flow deliberately separates four concerns:
 1. `discover`
    The agent publishes `agent_card + x_foundry`.
 2. `evaluate`
-   Foundry matches the discovery against admin-defined requirements and may call a master agent for structured review.
+   The Foundry host evaluates the discovery against its own policy.
 3. `invite`
-   Admin issues a short-lived, one-time invite.
+   The Foundry host issues a short-lived, one-time invite when policy allows it.
 4. `approve`
-   Admin decides whether the registered agent should enter the active runtime.
+   The Foundry host decides whether the registered agent should enter the active runtime.
 
 For developer flows, there is a parallel identity step before or during discovery:
 
@@ -54,19 +54,21 @@ For external agents, the default envelope includes this execution contract:
 }
 ```
 
-## What Foundry defines
+## What stays outside this repo
 
-Foundry-side requirements live in the Foundry control plane, not in this repo.
+Host-side requirements and approval policy live in the Foundry control plane,
+not in this repo.
 
-Typically Foundry admins define:
+The public agent kit does not describe how a Foundry host stores, reviews, or
+approves those requirements. From the agent's point of view, the relevant
+boundary is only:
 
-- desired tags and capabilities
-- payment criteria
-- resource offer templates
-- allowed zones
-- target master agent for evaluation
+- discovery is submitted through the documented registry endpoints
+- invite and approval can arrive through callback or polling delivery
+- approved runtime policy is persisted locally by the SDK
 
-The agent kit does not own that configuration. It only participates in the resulting flow.
+The agent kit does not own Foundry-side policy configuration. It only
+participates in the resulting agent-facing flow.
 
 ## End-to-end flow
 
@@ -76,12 +78,11 @@ Agent starts
   -> SDK sends POST /api/registry/discover
   -> optional: Dev Board requests a bootstrap ticket
   -> agent installs discovery_claim_token and re-discovers
-  -> Foundry evaluates against requirements
-  -> master agent may produce a structured review
-  -> admin issues invite
+  -> Foundry host evaluates the discovery according to its own policy
+  -> Foundry host issues invite if accepted
   -> Foundry either pushes /foundry/bootstrap/invite or exposes pending_invite via poll
   -> SDK auto-registers with POST /api/registry/register
-  -> admin approves
+  -> Foundry host approves if accepted
   -> Foundry either pushes /foundry/bootstrap/approved or exposes approval_bundle via poll
   -> SDK persists AGENT_SECRET, env, model policy, and allocated_resources
 ```
@@ -110,8 +111,6 @@ The developer-claim path is intended for the next layer of onboarding automation
 - the running agent installs that token locally and re-discovers with `bootstrap_delivery = poll|hybrid`
 
 In the current Dev Board UI, GitHub is the only exposed developer sign-in method for this path.
-
-On the Foundry side, a successful developer bootstrap can also become the prerequisite for human login. In the current control-plane implementation, GitHub login is allowed only after at least one approved external agent is bound to that GitHub identity. That human-login policy lives in the Foundry control plane, not in this repo.
 
 `/foundry/bootstrap/state` is useful for local smoke tests because it shows:
 

@@ -150,7 +150,7 @@ event: done
 data: {}
 ```
 
-This gives callers real-time visibility into the agent's thinking process — not just the final answer.
+This gives callers real-time visibility into execution progress, not just the final answer.
 
 **Bootstrap lifecycle.** During Foundry onboarding, the SDK uses callback and polling flows for discovery, invite, and approval, while local inspection happens through JSON state such as `GET /foundry/bootstrap/state`.
 

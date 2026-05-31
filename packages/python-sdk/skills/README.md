@@ -49,7 +49,7 @@ Step-by-step instructions for the agent.
 |-------|----------|-------------|
 | [verilog_rra](./verilog_rra/) | hardware | Build & verify Round Robin Arbiter testbenches with iverilog |
 | [sandbox_exec](./sandbox_exec/) | infrastructure | Execute commands & manage files in a Foundry sandbox |
-| [foundry_settlement](./foundry_settlement/) | payment | Handle task settlement & Stripe payments |
+| [foundry_settlement](./foundry_settlement/) | payment | Handle task settlement records and payment metadata |
 | [memory](./memory/) | core | Durable memory notes & journal management |
 | [summary](./summary/) | core | Work progress summaries & status reports |
 

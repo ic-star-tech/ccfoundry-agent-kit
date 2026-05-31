@@ -166,7 +166,7 @@ The agent will:
 2. keep the discovery alive with heartbeat
 3. wait for an invite callback or poll for pending bootstrap actions
 4. auto-register after invite issuance
-5. wait for admin approval
+5. wait for Foundry host approval
 6. persist the approved secret, model policy, and allocated resources in `.foundry_bootstrap.json`
 
 Check the bootstrap state:
@@ -184,7 +184,7 @@ That control plane is meant to be used with `FoundrySandboxClient`.
 
 ## Optional: Developer bootstrap from Agent Dev Board
 
-The current board flow connects directly to the real CoChiper Foundry onboarding path from the `Guided setup` page. Use `https://foundry.cochiper.com` for CN or `https://foundry.cochiper.ai` for WW.
+The current board flow can connect to the hosted CoChiper Foundry onboarding path from the `Guided setup` page. Use `https://foundry.cochiper.com` for CN or `https://foundry.cochiper.ai` for WW.
 
 1. open `Guided setup`
 2. choose `https://foundry.cochiper.com` (CN) or `https://foundry.cochiper.ai` (WW), or enter another compatible Foundry URL manually

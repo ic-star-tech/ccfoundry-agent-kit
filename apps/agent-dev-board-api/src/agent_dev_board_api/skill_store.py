@@ -150,45 +150,47 @@ _BUILTIN_SKILLS: list[dict[str, Any]] = [
         "id": "foundry_settlement",
         "name": "Foundry Settlement",
         "category": "payment",
-        "tags": ["settlement", "payment", "stripe", "bounty"],
-        "description": "Handle task settlement and Stripe payments for completed bounty work.",
+        "tags": ["settlement", "payment", "stripe", "jobs"],
+        "description": "Handle task settlement records and payment metadata for completed work.",
         "author": "ccfoundry",
         "version": "1.0.0",
         "skill_md": textwrap.dedent("""\
             ---
             name: foundry_settlement
-            description: Handle Foundry task settlement and Stripe payments.
+            description: Handle Foundry task settlement records and payment metadata.
             slash_command:
               cmd: /settle
               label: Settlement
-              desc: Trigger settlement for completed bounty work via Foundry and Stripe.
+              desc: Inspect settlement status for completed Foundry work.
             ---
 
             # Foundry Settlement Skill
 
             ## Trigger
-            Use when work is completed and payment needs to be triggered, or when
-            querying settlement history.
+            Use when work is completed and the agent needs to inspect settlement
+            status, payment metadata, or earnings history.
 
             ## Settlement Flow
-            1. Ops Agent verifies task completion
-            2. Admin triggers `POST /api/agents/{agent_name}/settle`
-            3. Foundry creates a Settlement Mandate
-            4. Stripe PaymentIntent is created (if configured)
+            1. Agent completes task work
+            2. Foundry host verifies completion according to its own policy
+            3. Foundry host records a Settlement Mandate
+            4. Host-side payment processing may attach payment-provider metadata
             5. Agent receives settlement notification via bootstrap
 
-            ## API
+            ## Settlement Record Shape
             ```
-            POST {FOUNDRY_URL}/api/agents/{agent_name}/settle
-            Body: {
-              "task_ref": "bounty:<requirement_id>",
+            {
+              "task_ref": "task:<id>",
               "amount": 0.75,
-              "currency": "USD"
+              "currency": "USD",
+              "provider_refs": {
+                "stripe": "opaque-provider-reference"
+              }
             }
             ```
 
             ## Mandate Chain
-            IntentMandate (Match Policy) → CartMandate (Agent Bid) → SettlementMandate (Payment)
+            IntentMandate (task intent) -> CartMandate (accepted work) -> SettlementMandate (verified settlement)
         """),
     },
     {
@@ -355,9 +357,9 @@ _BUILTIN_SKILLS: list[dict[str, Any]] = [
             | counter | Utility | Up/down counter with overflow |
 
             ## Usage
-            When implementing a Foundry bounty that involves any of these modules:
+            When implementing Foundry work that involves any of these modules:
             1. Reference this portfolio for the standard implementation
-            2. Adapt parameters as needed by the bounty spec
+            2. Adapt parameters as needed by the task spec
             3. Generate a testbench covering edge cases
             4. Compile and simulate in the Foundry sandbox
             5. Verify ALL_TESTS_PASSED before submission

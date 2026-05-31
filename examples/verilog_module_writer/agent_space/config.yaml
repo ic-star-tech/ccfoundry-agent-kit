@@ -42,7 +42,7 @@ slash_commands:
     skill_ref: ip_reference
   - cmd: /settle
     label: Settlement
-    desc: Trigger settlement for completed bounty work.
+    desc: Inspect settlement status for completed work.
     skill_ref: foundry_settlement
   - cmd: /memory
     label: Memory

@@ -19,7 +19,7 @@ Agent Dev Board is a privileged local development tool. Its API can:
 
 - create, start, stop, and retire local agent processes
 - read local Git and GitHub identity context
-- proxy chat and bounty requests to local agents
+- proxy chat and job requests to local agents
 - request Foundry bootstrap tickets
 - start Google Cloud Run deployment jobs using the host's `gcloud` and Docker credentials
 
@@ -76,7 +76,7 @@ For a custom Foundry host, pass an explicit developer/GitHub token in the UI or 
 CCFOUNDRY_TRUSTED_FOUNDRY_HOSTS=foundry.dev.example.com
 ```
 
-The Dev Board bounty proxy only forwards to loopback HTTP agent URLs such as `http://127.0.0.1:8085`.
+The Dev Board job proxy only forwards to loopback HTTP agent URLs such as `http://127.0.0.1:8085`.
 
 ## Secret Handling
 

@@ -17,4 +17,4 @@ Rules:
 - Generate self-checking testbenches with PASS/FAIL assertions and summary output.
 - Use `$dumpfile` / `$dumpvars` for waveform capture in testbenches.
 - Keep answers structured: module spec → implementation → testbench → compile/sim commands.
-- When completing a Foundry bounty, compile and run in the sandbox before declaring success.
+- When completing Foundry work, compile and run in the sandbox before declaring success.

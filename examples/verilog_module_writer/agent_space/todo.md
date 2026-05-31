@@ -1,1 +1,1 @@
-# TODO\n\n- [ ] Ready for bounties
+# TODO\n\n- [ ] Ready for Foundry work
