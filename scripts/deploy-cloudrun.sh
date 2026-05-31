@@ -12,7 +12,7 @@
 #   --min-instances <n>  Minimum instances (default: 0 = scale-to-zero)
 #   --memory <size>      Memory allocation (default: 512Mi)
 #   --cpu <n>            CPU allocation   (default: 1)
-#   --poll-schedule <s>  Cloud Scheduler cron expression (default: "* * * * *")
+#   --poll-schedule <s>  Cloud Scheduler cron expression (default: "*/5 * * * *")
 #   --foundry-url <url>  Foundry base URL to register the agent with
 #   --skip-scheduler     Don't create a Cloud Scheduler job
 #   --dry-run            Print commands without executing
@@ -30,7 +30,7 @@ AGENT_SPACE=""
 MIN_INSTANCES=0
 MEMORY="512Mi"
 CPU="1"
-POLL_SCHEDULE="* * * * *"
+POLL_SCHEDULE="*/5 * * * *"
 FOUNDRY_URL=""
 SKIP_SCHEDULER=false
 DRY_RUN=false
@@ -215,7 +215,7 @@ if ! $SKIP_SCHEDULER; then
         --oidc-token-audience="$SERVICE_URL" \
         --attempt-deadline=120s \
         --quiet
-    log "Scheduler job created: runs every minute"
+    log "Scheduler job created: schedule ${POLL_SCHEDULE}"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────

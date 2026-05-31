@@ -231,8 +231,19 @@ type CloudRunAuthSession = {
   updated_at?: string;
 };
 
+type RetireAgentResult = {
+  ok: boolean;
+  agent_name: string;
+  foundry?: {
+    status?: string;
+    upstream?: Record<string, unknown>;
+  };
+  local_agent?: LocalAgentRuntime | null;
+};
+
 const API_PORT = import.meta.env.VITE_API_PORT || "8090";
 const DEFAULT_FOUNDRY_URL = "https://foundry.cochiper.com";
+const DEFAULT_CLOUD_RUN_POLL_SCHEDULE = "*/5 * * * *";
 const CUSTOM_FOUNDRY_PRESET_ID = "__custom__";
 const FOUNDRY_URL_PRESETS = [
   { id: "cochiper-com", label: "CoChiper .com (CN)", url: "https://foundry.cochiper.com" },
@@ -394,8 +405,17 @@ function FoundryUrlChooser({
 async function readErrorMessage(response: Response): Promise<string> {
   try {
     const payload = await response.json();
-    if (payload && typeof payload === "object" && typeof (payload as { detail?: unknown }).detail === "string") {
-      return String((payload as { detail: string }).detail);
+    if (payload && typeof payload === "object") {
+      const detail = (payload as { detail?: unknown }).detail;
+      if (typeof detail === "string") {
+        return detail;
+      }
+      if (detail && typeof detail === "object" && typeof (detail as { message?: unknown }).message === "string") {
+        return String((detail as { message: string }).message);
+      }
+      if (typeof (payload as { message?: unknown }).message === "string") {
+        return String((payload as { message: string }).message);
+      }
     }
     return JSON.stringify(payload);
   } catch {
@@ -1430,6 +1450,7 @@ export default function App() {
   const [foundryBootstrapSession, setFoundryBootstrapSession] = useState<FoundryBootstrapSession | null>(null);
   const [localAgentLoading, setLocalAgentLoading] = useState(false);
   const [localAgentError, setLocalAgentError] = useState("");
+  const [retiringAgent, setRetiringAgent] = useState("");
   const [settlements, setSettlements] = useState<Array<Record<string, unknown>>>([]);
   const [settlementsLoading, setSettlementsLoading] = useState(false);
   const [settlementsError, setSettlementsError] = useState("");
@@ -1465,7 +1486,7 @@ export default function App() {
     memory: "512Mi",
     cpu: "1",
     min_instances: "0",
-    poll_schedule: "* * * * *",
+    poll_schedule: DEFAULT_CLOUD_RUN_POLL_SCHEDULE,
     skip_scheduler: false,
   });
 
@@ -2090,6 +2111,64 @@ export default function App() {
     }
   }
 
+  async function retireLocalAgent(agentName = selectedAgent) {
+    const normalizedAgentName = agentName.trim();
+    if (!normalizedAgentName) {
+      setLocalAgentError("Select an agent before retiring it.");
+      return;
+    }
+    if (!developerSessionReady) {
+      setLocalAgentError("Login with GitHub before retiring a Foundry agent.");
+      return;
+    }
+    const localAgent = localAgents.find((agent) => agent.name === normalizedAgentName);
+    const label = localAgent?.label || normalizedAgentName;
+    const confirmed = window.confirm(
+      `Retire ${label}? Foundry will soft-retire the agent and Dev Board will remove it from the active runtime list.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setRetiringAgent(normalizedAgentName);
+    setLocalAgentError("");
+    setLocalAgentNotice("");
+    try {
+      const response = await fetch(`${API_BASE}/api/local-agents/${encodeURIComponent(normalizedAgentName)}/retire`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          foundry_url: normalizedFoundryUrl || foundryUrl,
+          developer_token: developerForm.developer_token,
+          github_token: developerForm.github_token,
+          reason: "dev_board_retire",
+          stop_local: true,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as RetireAgentResult;
+      const foundryStatus = textValue(payload.foundry?.status, "RETIRED");
+      setLocalAgentNotice(`Retired ${label} in Foundry (${foundryStatus}) and removed it from active Dev Board runtimes.`);
+      if (selectedAgent === normalizedAgentName) {
+        setHandshakeResult(null);
+        setDeveloperTicket(null);
+        resetConversation();
+      }
+      await refreshAgentInventory();
+      await refreshCloudRunDeployments();
+    } catch (err) {
+      if (err instanceof TypeError) {
+        setLocalAgentError(`Dev Board API did not respond at ${API_BASE}. Check that port ${API_PORT} is reachable from this browser.`);
+      } else {
+        setLocalAgentError(String(err));
+      }
+    } finally {
+      setRetiringAgent("");
+    }
+  }
+
   async function refreshCloudRunStatus() {
     setCloudRunStatusLoading(true);
     setCloudRunError("");
@@ -2255,7 +2334,7 @@ export default function App() {
           min_instances: Number.isInteger(minInstances) ? minInstances : 0,
           memory: cloudRunForm.memory.trim() || "512Mi",
           cpu: cloudRunForm.cpu.trim() || "1",
-          poll_schedule: cloudRunForm.poll_schedule.trim() || "* * * * *",
+          poll_schedule: cloudRunForm.poll_schedule.trim() || DEFAULT_CLOUD_RUN_POLL_SCHEDULE,
           skip_scheduler: cloudRunForm.skip_scheduler,
           dry_run: dryRun,
         }),
@@ -2816,9 +2895,9 @@ export default function App() {
                         <input
                           value={cloudRunForm.poll_schedule}
                           onChange={(event) => updateCloudRunForm("poll_schedule", event.target.value)}
-                          placeholder="* * * * *"
+                          placeholder={DEFAULT_CLOUD_RUN_POLL_SCHEDULE}
                         />
-                        <span className="field-helper">Cloud Scheduler cron. Default runs once per minute.</span>
+                        <span className="field-helper">Cloud Scheduler cron. Default runs every 5 minutes.</span>
                       </label>
                     </div>
                     <label className="inline-toggle cloud-run-toggle">
@@ -3304,6 +3383,49 @@ export default function App() {
                     </div>
                   </div>
                 </section>
+
+                <section className="panel lifecycle-panel">
+                  <div className="section-heading">
+                    <div>
+                      <p className="eyebrow">Lifecycle</p>
+                      <h3>Retire agent</h3>
+                    </div>
+                  </div>
+                  <p className="muted">
+                    Retiring keeps Foundry history and audit data, removes active bindings, and stops this Dev Board runtime.
+                  </p>
+                  <div className="kv-list compact-kv">
+                    <div>
+                      <span>Selected runtime</span>
+                      <strong>{textValue(selectedLocalAgent?.label || selectedAgent, "none selected")}</strong>
+                    </div>
+                    <div>
+                      <span>Foundry action</span>
+                      <strong>soft retire</strong>
+                    </div>
+                    <div>
+                      <span>Developer login</span>
+                      <strong>{developerSessionReady ? displayedDeveloperLogin : "required"}</strong>
+                    </div>
+                  </div>
+                  {!developerSessionReady ? (
+                    <div className="guide-blocker">
+                      <strong>GitHub login required</strong>
+                      <p>Use Guided setup step 3 before retiring a Foundry-linked agent.</p>
+                    </div>
+                  ) : null}
+                  <div className="actions split-actions">
+                    <button
+                      className="secondary danger"
+                      onClick={() => retireLocalAgent(selectedAgent)}
+                      disabled={!selectedAgent || !developerSessionReady || Boolean(retiringAgent)}
+                    >
+                      {retiringAgent && retiringAgent === selectedAgent ? "Retiring..." : "Retire selected agent"}
+                    </button>
+                  </div>
+                  {localAgentNotice ? <div className="reply">{localAgentNotice}</div> : null}
+                  {localAgentError ? <div className="error">{localAgentError}</div> : null}
+                </section>
               </>
             ) : null}
 
@@ -3461,6 +3583,14 @@ export default function App() {
                                 }}
                               >
                                 Open playground
+                              </button>
+                              <button
+                                className="secondary danger"
+                                onClick={() => retireLocalAgent(agent.name)}
+                                disabled={!developerSessionReady || Boolean(retiringAgent)}
+                                title={developerSessionReady ? "Retire this agent in Foundry and Dev Board" : "Login with GitHub before retiring"}
+                              >
+                                {retiringAgent === agent.name ? "Retiring..." : "Retire"}
                               </button>
                             </div>
                           </article>
@@ -3680,9 +3810,9 @@ export default function App() {
                       <input
                         value={cloudRunForm.poll_schedule}
                         onChange={(event) => updateCloudRunForm("poll_schedule", event.target.value)}
-                        placeholder="* * * * *"
+                        placeholder={DEFAULT_CLOUD_RUN_POLL_SCHEDULE}
                       />
-                      <span className="field-helper">Cloud Scheduler cron. Default runs once per minute.</span>
+                      <span className="field-helper">Cloud Scheduler cron. Default runs every 5 minutes.</span>
                     </label>
                   </div>
                   <label className="inline-toggle cloud-run-toggle">

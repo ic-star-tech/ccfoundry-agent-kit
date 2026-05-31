@@ -8,6 +8,7 @@ import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import yaml
@@ -96,6 +97,7 @@ class LocalAgentRuntime(BaseModel):
     pid: int | None = None
     env_path: str = ""
     log_path: str = ""
+    retired_at: str = ""
 
 
 class LocalAgentCreateRequest(BaseModel):
@@ -114,13 +116,21 @@ class CloudRunDeployRequest(BaseModel):
     min_instances: int = 0
     memory: str = "512Mi"
     cpu: str = "1"
-    poll_schedule: str = "* * * * *"
+    poll_schedule: str = "*/5 * * * *"
     skip_scheduler: bool = False
     dry_run: bool = False
 
 
 class CloudRunAuthCodeRequest(BaseModel):
     code: str
+
+
+class RetireAgentRequest(BaseModel):
+    foundry_url: str = ""
+    developer_token: str = ""
+    github_token: str = ""
+    reason: str = "dev_board_retire"
+    stop_local: bool = True
 
 
 LOCAL_AGENT_MANAGER = LocalAgentManager(
@@ -375,6 +385,100 @@ async def _developer_route_probes(foundry_url: str) -> dict[str, dict[str, Any]]
         }
 
 
+async def _retire_foundry_agent(
+    *,
+    agent: LiteAgentConfig,
+    foundry_url: str,
+    request: RetireAgentRequest,
+) -> dict[str, Any]:
+    normalized = _normalize_url(foundry_url)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Foundry URL is required")
+
+    developer_token = str(request.developer_token or "").strip()
+    github_token = str(request.github_token or "").strip()
+    if not developer_token and not github_token:
+        raise HTTPException(status_code=400, detail="GitHub login is required before retiring a Foundry agent")
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if developer_token:
+        headers["Authorization"] = f"Bearer {developer_token}"
+    if github_token:
+        headers["X-GitHub-Token"] = github_token
+
+    reason = str(request.reason or "dev_board_retire").strip() or "dev_board_retire"
+    payload = {
+        "reason": reason,
+        "requested_by": "agent_dev_board",
+        "source": "agent_dev_board",
+    }
+    encoded_name = quote(agent.name, safe="")
+    route_attempts: list[dict[str, Any]] = []
+    failure_message = ""
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+        for method, route_path in (
+            ("DELETE", f"/api/my/agents/{encoded_name}"),
+            ("POST", f"/api/agents/{encoded_name}/retire"),
+        ):
+            url = f"{normalized}{route_path}"
+            try:
+                response = await client.request(
+                    method,
+                    url,
+                    headers=headers,
+                    json=payload if method != "DELETE" else None,
+                )
+            except Exception as exc:
+                logger.warning("Foundry retire request failed for %s %s", method, url, exc_info=exc)
+                route_attempts.append({"url": url, "method": method, "ok": False, "detail": "request_failed"})
+                continue
+
+            entry: dict[str, Any] = {
+                "url": url,
+                "method": method,
+                "status_code": response.status_code,
+                "ok": response.is_success or response.status_code == 410,
+            }
+            if response.status_code in {404, 405}:
+                entry["detail"] = "route_not_available"
+                route_attempts.append(entry)
+                continue
+            route_attempts.append(entry)
+
+            if response.is_success or response.status_code == 410:
+                try:
+                    upstream_payload = response.json()
+                except Exception:
+                    upstream_payload = {}
+                if not isinstance(upstream_payload, dict):
+                    upstream_payload = {"value": upstream_payload}
+                return {
+                    "ok": True,
+                    "foundry_url": normalized,
+                    "route": url,
+                    "route_attempts": route_attempts,
+                    "upstream": upstream_payload,
+                    "status": str(upstream_payload.get("status") or "RETIRED"),
+                }
+
+            try:
+                upstream_error = response.json()
+            except Exception:
+                upstream_error = {"detail": response.text}
+            if isinstance(upstream_error, dict):
+                failure_message = str(upstream_error.get("detail") or upstream_error.get("message") or "").strip()
+            failure_message = failure_message or f"Foundry retire request failed (status {response.status_code})"
+
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "message": failure_message or "No supported Foundry retire endpoint was found",
+            "foundry_url": normalized,
+            "route_attempts": route_attempts,
+        },
+    )
+
+
 def _developer_identity_from_context(git_context: dict[str, Any], github_identity: dict[str, Any]) -> dict[str, Any]:
     identity: dict[str, Any] = {}
     login = str(github_identity.get("login") or "").strip()
@@ -522,8 +626,11 @@ async def list_local_agent_templates() -> list[LocalAgentTemplate]:
 
 
 @app.get("/api/local-agents")
-async def list_local_agents() -> list[LocalAgentRuntime]:
-    return [LocalAgentRuntime.model_validate(item) for item in LOCAL_AGENT_MANAGER.list_agents()]
+async def list_local_agents(include_retired: bool = False) -> list[LocalAgentRuntime]:
+    return [
+        LocalAgentRuntime.model_validate(item)
+        for item in LOCAL_AGENT_MANAGER.list_agents(include_retired=include_retired)
+    ]
 
 
 @app.post("/api/local-agents")
@@ -569,6 +676,40 @@ async def stop_local_agent(agent_name: str) -> LocalAgentRuntime:
         raise HTTPException(status_code=409, detail="Local agent configuration is invalid") from exc
     LOCAL_AGENT_MANAGER.ensure_runtime_files()
     return LocalAgentRuntime.model_validate(item)
+
+
+@app.post("/api/local-agents/{agent_name}/retire")
+async def retire_local_agent(agent_name: str, request: RetireAgentRequest) -> dict[str, Any]:
+    agents = _load_agents()
+    agent = agents.get(agent_name)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    bootstrap_state = await _agent_bootstrap_state(agent)
+    foundry_url = _normalize_url(request.foundry_url or str(bootstrap_state.get("foundry_base_url") or ""))
+    remote_result = await _retire_foundry_agent(
+        agent=agent,
+        foundry_url=foundry_url,
+        request=request,
+    )
+
+    local_runtime: dict[str, Any] | None = None
+    if request.stop_local:
+        try:
+            local_runtime = LOCAL_AGENT_MANAGER.retire_agent(agent_name, remote_result=remote_result)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Agent not found") from exc
+        except RuntimeError as exc:
+            logger.warning("Local retire failed for %s", agent_name, exc_info=exc)
+            raise HTTPException(status_code=409, detail="Local agent configuration is invalid") from exc
+        LOCAL_AGENT_MANAGER.ensure_runtime_files()
+
+    return {
+        "ok": True,
+        "agent_name": agent_name,
+        "foundry": remote_result,
+        "local_agent": local_runtime,
+    }
 
 
 # ---------------------------------------------------------------------------

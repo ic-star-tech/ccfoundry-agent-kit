@@ -216,6 +216,9 @@ class LocalAgentManager:
             name = str(item.get("name") or "").strip()
             label = str(item.get("label") or "").strip()
             base_url = str(item.get("base_url") or "").strip()
+            status = str(item.get("status") or "").strip().lower()
+            if status == "retired":
+                continue
             if not name or not label or not base_url:
                 continue
             entries.append({
@@ -268,10 +271,11 @@ class LocalAgentManager:
             item["pid"] = None
         return item
 
-    def list_agents(self) -> list[dict[str, Any]]:
+    def list_agents(self, *, include_retired: bool = False) -> list[dict[str, Any]]:
         registry = self._load_registry()
         changed = False
-        items: list[dict[str, Any]] = []
+        stored_items: list[dict[str, Any]] = []
+        visible_items: list[dict[str, Any]] = []
         for raw in registry.get("agents", []):
             item = dict(raw)
             before = json.dumps(item, sort_keys=True, ensure_ascii=False)
@@ -279,12 +283,14 @@ class LocalAgentManager:
             after = json.dumps(item, sort_keys=True, ensure_ascii=False)
             if before != after:
                 changed = True
-            items.append(item)
+            stored_items.append(item)
+            if include_retired or str(item.get("status") or "").strip().lower() != "retired":
+                visible_items.append(item)
         if changed:
-            registry["agents"] = items
+            registry["agents"] = stored_items
             self._save_registry(registry)
             self._sync_agents_file()
-        return items
+        return visible_items
 
     def _find_agent(self, name: str) -> tuple[dict[str, Any], dict[str, Any]]:
         registry = self._load_registry()
@@ -463,6 +469,21 @@ class LocalAgentManager:
         if item.get("status") == "running" and _is_pid_running(int(item.get("pid") or 0)):
             return item
         item = self._spawn_agent(item)
+        self._replace_agent(registry, item)
+        return item
+
+    def retire_agent(self, name: str, *, remote_result: dict[str, Any] | None = None) -> dict[str, Any]:
+        stopped = self.stop_agent(name)
+        registry, item = self._find_agent(str(stopped.get("name") or name))
+        item["pid"] = None
+        item["status"] = "retired"
+        item["retired_at"] = _utcnow_iso()
+        if remote_result is not None:
+            item["retire_result"] = {
+                "ok": bool(remote_result.get("ok")),
+                "foundry_url": str(remote_result.get("foundry_url") or ""),
+                "status": str(remote_result.get("status") or ""),
+            }
         self._replace_agent(registry, item)
         return item
 

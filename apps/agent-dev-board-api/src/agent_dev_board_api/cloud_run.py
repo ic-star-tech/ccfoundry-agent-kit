@@ -325,7 +325,7 @@ class CloudRunManager:
         clean_region = str(region or "").strip() or "us-central1"
         clean_memory = str(memory or "").strip() or "512Mi"
         clean_cpu = str(cpu or "").strip() or "1"
-        clean_schedule = str(poll_schedule or "").strip() or "* * * * *"
+        clean_schedule = str(poll_schedule or "").strip() or "*/5 * * * *"
         clean_foundry_url = str(foundry_url or "").strip()
         min_instances = max(0, _safe_int(min_instances, 0))
 

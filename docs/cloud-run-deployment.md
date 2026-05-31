@@ -5,7 +5,7 @@ Deploy your CCFoundry agent to Google Cloud Run for always-available, serverless
 ## Architecture
 
 ```
-Cloud Scheduler (every 1 min)
+Cloud Scheduler (default every 5 min)
     ↓ POST + OIDC Token
 Cloud Run (agent container, scale-to-zero)
     ↓ /foundry/poll
@@ -17,7 +17,7 @@ Foundry API (claim → process → complete)
 When `AGENT_DEPLOY_MODE=cloud_run`:
 - Internal polling loops (`_run_loop`, `_heartbeat_loop`) are **disabled**
 - A new `POST /foundry/poll` endpoint handles heartbeat + task claiming in a single request
-- Cloud Scheduler calls this endpoint every minute with OIDC authentication
+- Cloud Scheduler calls this endpoint on the configured cron schedule with OIDC authentication
 - The container scales to zero when idle (no cost)
 
 ## Prerequisites
@@ -65,7 +65,7 @@ This will:
 1. Build a Docker image locally
 2. Push it to Artifact Registry
 3. Deploy to Cloud Run with `AGENT_DEPLOY_MODE=cloud_run`
-4. Create a Cloud Scheduler job to poll every minute
+4. Create a Cloud Scheduler job to poll every 5 minutes by default
 
 ## Deploy From Agent Dev Board
 
@@ -86,7 +86,7 @@ Use it after creating an agent source workspace from a template. The UI will:
 
 The UI uses the selected agent instance directory as the `--agent-space` input, so installed Skill Store resources are included in the Cloud Run image. If `gcloud` is not authenticated, use the `Google Cloud login` action in Dev Board or run `gcloud auth login --no-launch-browser` on the machine hosting the Dev Board API, then refresh Cloud Run status. On GCE/GVM, an attached service account also works if it has sufficient Cloud Run, Artifact Registry, and Cloud Scheduler permissions.
 
-The region field offers quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), but you can type another valid Cloud Run region ID. The poll schedule is a Cloud Scheduler cron expression; the default `* * * * *` triggers `POST /foundry/poll` once per minute.
+The region field offers quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), but you can type another valid Cloud Run region ID. The poll schedule is a Cloud Scheduler cron expression; the default `*/5 * * * *` triggers `POST /foundry/poll` every 5 minutes. Use `* * * * *` only when you need one-minute polling.
 
 Deployment can take a few minutes because the board runs Docker build/push, creates a Cloud Run revision, updates the public URL env var, grants Scheduler invoker access, and creates or updates the Scheduler job. The UI polls the deployment job and shows elapsed time plus recent log lines while it runs.
 
@@ -104,7 +104,7 @@ Options:
   --min-instances <n>  Minimum instances (default: 0 = scale-to-zero)
   --memory <size>      Memory allocation (default: 512Mi)
   --cpu <n>            CPU allocation   (default: 1)
-  --poll-schedule <s>  Cloud Scheduler cron (default: "* * * * *")
+  --poll-schedule <s>  Cloud Scheduler cron (default: "*/5 * * * *")
   --foundry-url <url>  Foundry base URL
   --skip-scheduler     Don't create a Cloud Scheduler job
   --dry-run            Print commands without executing
@@ -155,7 +155,7 @@ gcloud run services add-iam-policy-binding my-agent \
 # Create the scheduler job
 gcloud scheduler jobs create http poll-my-agent \
   --location=us-central1 \
-  --schedule="* * * * *" \
+  --schedule="*/5 * * * *" \
   --uri="${SERVICE_URL}/foundry/poll" \
   --http-method=POST \
   --oidc-service-account-email="$SA_EMAIL" \
@@ -199,7 +199,7 @@ gcloud scheduler jobs resume poll-my-agent --location=us-central1
 | Cloud Scheduler | 3 jobs free | $0.10/job/month |
 | Artifact Registry | 500MB free | $0.10/GB/month |
 
-With scale-to-zero and 1-minute polling, typical cost is **< $5/month**.
+With scale-to-zero and 5-minute polling, typical cost is **< $5/month**. One-minute polling is still usually inexpensive, but it produces five times as many Cloud Run invocations and Scheduler-triggered cold starts.
 
 ## How It Works
 

@@ -76,7 +76,7 @@ The guided setup flow separates the agent source from the runtime target:
 6. Run the appropriate smoke test
 7. Open Foundry to test the linked agent
 
-When `Google Cloud Run` is selected, step 2 shows Cloud Run preflight, Google Cloud login, project/region settings, dry-run, and deploy controls. The region field has quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), while still accepting another valid Cloud Run region ID.
+When `Google Cloud Run` is selected, step 2 shows Cloud Run preflight, Google Cloud login, project/region settings, dry-run, and deploy controls. The region field has quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), while still accepting another valid Cloud Run region ID. The default poll schedule is `*/5 * * * *`, which keeps scale-to-zero agents responsive without producing one request per minute for every test agent.
 
 The real deploy is intentionally gated until the Foundry claim is installed so the Cloud Run image contains the agent's current claimed source workspace. Deployment can take a few minutes while Docker builds, pushes to Artifact Registry, Cloud Run creates a revision, and Cloud Scheduler is configured; the UI shows elapsed time plus the latest deployment logs. The Cloud Run smoke test checks deployment status, Scheduler, and the latest bootstrap poll instead of using the local playground chat path.
 
@@ -93,6 +93,12 @@ Dev Board stores deployment job logs under its runtime directory and polls them 
 The Cloud Run flow expects Google Cloud authentication on the machine running the Dev Board API. This can be a user login from `gcloud auth login --no-launch-browser` or a GCE/GVM service account with sufficient Cloud Run, Artifact Registry, and Cloud Scheduler permissions. The UI surfaces the current auth status and provides a `Google Cloud login` action for the no-browser flow. Real deploy is disabled until `gcloud` is authenticated; dry-run remains available for command inspection.
 
 No Google service account key files are required or committed. Cloud SDK user credentials remain in the host user's `gcloud` config directory, and Dev Board auth session/runtime logs live under ignored runtime paths.
+
+## Retiring Agents
+
+Use `Agent card -> Overview -> Retire agent` or the `Retire` action in `Agent card -> Local runtimes` to clean up Dev Board test agents. Retire requires the same GitHub developer login used for onboarding. Dev Board first asks Foundry to soft-retire the linked external agent, then stops the local runtime and removes it from active Dev Board inventories. The local runtime record remains in `.dev-board/local_agents.json` with status `retired` for audit/debugging, but `agents.yaml` and the default UI list hide it.
+
+Foundry should treat this as a soft-retire rather than a hard delete: keep historical tasks, settlements, and audit trails; remove active bindings; and hide retired agents from normal picker lists. A separate admin/owner retired-agent list can be added later if operators need restore or audit workflows.
 
 ## Components
 
