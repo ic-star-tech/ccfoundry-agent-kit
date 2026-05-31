@@ -238,6 +238,12 @@ const FOUNDRY_URL_PRESETS = [
   { id: "cochiper-com", label: "CoChiper .com (CN)", url: "https://foundry.cochiper.com" },
   { id: "cochiper-ai", label: "CoChiper .ai (WW)", url: "https://foundry.cochiper.ai" },
 ] as const;
+const CLOUD_RUN_REGION_OPTIONS = [
+  { value: "us-central1", label: "US Central (Iowa)" },
+  { value: "europe-west2", label: "UK (London)" },
+  { value: "asia-east2", label: "Hong Kong" },
+  { value: "asia-southeast1", label: "Singapore" },
+] as const;
 
 const DEFAULT_API_BASE =
   typeof window === "undefined"
@@ -328,6 +334,18 @@ function boolValue(value: unknown): boolean {
   return value === true;
 }
 
+function formatDuration(startedAt: string, finishedAt = ""): string {
+  const startMs = Date.parse(startedAt);
+  if (!Number.isFinite(startMs)) {
+    return "pending";
+  }
+  const endMs = finishedAt ? Date.parse(finishedAt) : Date.now();
+  const elapsedSeconds = Math.max(0, Math.round((endMs - startMs) / 1000));
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
 function FoundryUrlChooser({
   label,
   value,
@@ -395,10 +413,10 @@ function expectArray<T>(value: unknown, label: string): T[] {
 
 function statusTone(status: string): "neutral" | "success" | "warn" {
   const normalized = status.trim().toUpperCase();
-  if (["APPROVED", "REGISTERED", "REDEEMED", "MATCHED", "ONLINE", "TRUE", "ACTIVE"].includes(normalized)) {
+  if (["APPROVED", "REGISTERED", "REDEEMED", "MATCHED", "ONLINE", "TRUE", "ACTIVE", "SUCCEEDED", "SUCCESS"].includes(normalized)) {
     return "success";
   }
-  if (["REVIEWING", "DISCOVERED", "ISSUED", "PENDING", "INLINE_REGISTER"].includes(normalized)) {
+  if (["REVIEWING", "DISCOVERED", "ISSUED", "PENDING", "INLINE_REGISTER", "QUEUED", "RUNNING"].includes(normalized)) {
     return "warn";
   }
   return "neutral";
@@ -1569,11 +1587,15 @@ export default function App() {
   const cloudRunAuthSessionStatus = textValue(cloudRunAuthSession?.status);
   const cloudRunAuthInProgress = ["starting", "running"].includes(cloudRunAuthSessionStatus);
   const cloudRunAuthSucceeded = cloudRunAuthSessionStatus === "succeeded";
+  const cloudRunDeploymentStatus = textValue(displayedCloudRunDeployment?.status);
+  const cloudRunDeploymentActive = ["queued", "running"].includes(cloudRunDeploymentStatus);
+  const cloudRunDeploymentStarted = Boolean(displayedCloudRunDeployment && !displayedCloudRunDeployment.dry_run);
+  const cloudRunClaimReady = claimInstalled || cloudRunDeploymentStarted;
   const cloudRunDeployBlockReason = !selectedLocalAgent
     ? "Create or select an agent source first."
     : !cloudRunAuthenticated
       ? "Google Cloud login is required before Cloud Run deployment."
-      : !claimInstalled
+      : !cloudRunClaimReady
         ? "Foundry claim is not installed yet. Complete GitHub login, then request a bootstrap ticket in step 4."
         : "";
   const cloudRunDeployButtonLabel = cloudRunDeploying
@@ -1582,9 +1604,15 @@ export default function App() {
       ? "Deploy after source"
       : !cloudRunAuthenticated
         ? "Deploy after Google login"
-        : !claimInstalled
+        : !cloudRunClaimReady
           ? "Deploy after Foundry claim"
           : "Deploy to Cloud Run";
+  const cloudRunDeploymentLogs = displayedCloudRunDeployment?.logs ?? [];
+  const latestCloudRunDeploymentLogs = cloudRunDeploymentLogs.slice(-8);
+  const cloudRunDeploymentElapsed = formatDuration(
+    textValue(displayedCloudRunDeployment?.started_at, textValue(displayedCloudRunDeployment?.created_at)),
+    textValue(displayedCloudRunDeployment?.finished_at),
+  );
 
   useEffect(() => {
     if (foundryUrl.trim()) {
@@ -2405,6 +2433,13 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <datalist id="cloud-run-region-options">
+        {CLOUD_RUN_REGION_OPTIONS.map((region) => (
+          <option key={region.value} value={region.value}>
+            {region.label}
+          </option>
+        ))}
+      </datalist>
       <aside className="global-sidebar">
         <div className="brand-block">
           <div className="brand-row">
@@ -2659,8 +2694,8 @@ export default function App() {
                       <span className={`chip tone-${cloudRunStatus?.docker?.installed ? "success" : "warn"}`}>
                         {cloudRunStatus?.docker?.installed ? "docker available" : "docker missing"}
                       </span>
-                      <span className={`chip ${claimInstalled ? "tone-success" : "tone-warn"}`}>
-                        {claimInstalled ? "claim ready" : "claim needed before deploy"}
+                      <span className={`chip ${cloudRunClaimReady ? "tone-success" : "tone-warn"}`}>
+                        {cloudRunClaimReady ? "claim ready" : "claim needed before deploy"}
                       </span>
                     </div>
                     <div className="kv-list compact-kv">
@@ -2745,10 +2780,12 @@ export default function App() {
                       <label>
                         Region
                         <input
+                          list="cloud-run-region-options"
                           value={cloudRunForm.region}
                           onChange={(event) => updateCloudRunForm("region", event.target.value)}
                           placeholder="us-central1"
                         />
+                        <span className="field-helper">Quick picks: US, UK London, Hong Kong, Singapore.</span>
                       </label>
                       <label>
                         Memory
@@ -2781,6 +2818,7 @@ export default function App() {
                           onChange={(event) => updateCloudRunForm("poll_schedule", event.target.value)}
                           placeholder="* * * * *"
                         />
+                        <span className="field-helper">Cloud Scheduler cron. Default runs once per minute.</span>
                       </label>
                     </div>
                     <label className="inline-toggle cloud-run-toggle">
@@ -2818,17 +2856,41 @@ export default function App() {
                       </div>
                     ) : null}
                     {displayedCloudRunDeployment ? (
-                      <div className="reply compact-reply">
-                        <strong>{displayedCloudRunDeployment.service_name}</strong>
-                        <p>
-                          Status: <code>{displayedCloudRunDeployment.status}</code>
-                          {displayedCloudRunDeployment.result?.service_url ? (
-                            <>
-                              {" "}
-                              URL: <code>{displaySafeUrl(displayedCloudRunDeployment.result.service_url)}</code>
-                            </>
-                          ) : null}
-                        </p>
+                      <div className={`cloud-run-progress-panel ${cloudRunDeploymentActive ? "active" : ""}`}>
+                        <div className="cloud-run-progress-header">
+                          <div>
+                            <strong>{cloudRunDeploymentActive ? "Deployment in progress" : "Latest deployment"}</strong>
+                            <p>
+                              {cloudRunDeploymentActive
+                                ? "Build, image push, Cloud Run deploy, and Scheduler setup can take a few minutes."
+                                : "Most recent Cloud Run job for the selected agent."}
+                            </p>
+                          </div>
+                          <span className={`status-pill ${statusTone(cloudRunDeploymentStatus)}`}>
+                            {textValue(displayedCloudRunDeployment.status, "pending")}
+                          </span>
+                        </div>
+                        <div className="kv-list compact-kv">
+                          <div>
+                            <span>Service</span>
+                            <strong>{displayedCloudRunDeployment.service_name}</strong>
+                          </div>
+                          <div>
+                            <span>Elapsed</span>
+                            <strong>{cloudRunDeploymentElapsed}</strong>
+                          </div>
+                          <div>
+                            <span>Region</span>
+                            <strong>{textValue(displayedCloudRunDeployment.region, cloudRunForm.region)}</strong>
+                          </div>
+                          <div>
+                            <span>Service URL</span>
+                            <strong>{displaySafeUrl(textValue(displayedCloudRunDeployment.result?.service_url), "pending")}</strong>
+                          </div>
+                        </div>
+                        <div className="code-block compact-code-block cloud-run-progress-log">
+                          <pre>{latestCloudRunDeploymentLogs.join("\n") || "Waiting for deployment output..."}</pre>
+                        </div>
                       </div>
                     ) : null}
                     {cloudRunError ? <div className="error">{cloudRunError}</div> : null}
@@ -3582,10 +3644,12 @@ export default function App() {
                     <label>
                       Region
                       <input
+                        list="cloud-run-region-options"
                         value={cloudRunForm.region}
                         onChange={(event) => updateCloudRunForm("region", event.target.value)}
                         placeholder="us-central1"
                       />
+                      <span className="field-helper">Quick picks: US, UK London, Hong Kong, Singapore.</span>
                     </label>
                     <label>
                       Memory
@@ -3618,6 +3682,7 @@ export default function App() {
                         onChange={(event) => updateCloudRunForm("poll_schedule", event.target.value)}
                         placeholder="* * * * *"
                       />
+                      <span className="field-helper">Cloud Scheduler cron. Default runs once per minute.</span>
                     </label>
                   </div>
                   <label className="inline-toggle cloud-run-toggle">

@@ -76,7 +76,9 @@ The guided setup flow separates the agent source from the runtime target:
 6. Run the appropriate smoke test
 7. Open Foundry to test the linked agent
 
-When `Google Cloud Run` is selected, step 2 shows Cloud Run preflight, Google Cloud login, project/region settings, dry-run, and deploy controls. The real deploy is intentionally gated until the Foundry claim is installed so the Cloud Run image contains the agent's current claimed source workspace. The Cloud Run smoke test checks deployment status, Scheduler, and the latest bootstrap poll instead of using the local playground chat path.
+When `Google Cloud Run` is selected, step 2 shows Cloud Run preflight, Google Cloud login, project/region settings, dry-run, and deploy controls. The region field has quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), while still accepting another valid Cloud Run region ID.
+
+The real deploy is intentionally gated until the Foundry claim is installed so the Cloud Run image contains the agent's current claimed source workspace. Deployment can take a few minutes while Docker builds, pushes to Artifact Registry, Cloud Run creates a revision, and Cloud Scheduler is configured; the UI shows elapsed time plus the latest deployment logs. The Cloud Run smoke test checks deployment status, Scheduler, and the latest bootstrap poll instead of using the local playground chat path.
 
 The `Agent card -> Cloud Run` tab exposes the same headless Cloud Run deploy flow from [Cloud Run Deployment](cloud-run-deployment.md). It checks local `gcloud` / Docker status, shows the active Google account and project, and starts an asynchronous deployment job for the selected agent.
 

@@ -86,6 +86,10 @@ Use it after creating an agent source workspace from a template. The UI will:
 
 The UI uses the selected agent instance directory as the `--agent-space` input, so installed Skill Store resources are included in the Cloud Run image. If `gcloud` is not authenticated, use the `Google Cloud login` action in Dev Board or run `gcloud auth login --no-launch-browser` on the machine hosting the Dev Board API, then refresh Cloud Run status. On GCE/GVM, an attached service account also works if it has sufficient Cloud Run, Artifact Registry, and Cloud Scheduler permissions.
 
+The region field offers quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), but you can type another valid Cloud Run region ID. The poll schedule is a Cloud Scheduler cron expression; the default `* * * * *` triggers `POST /foundry/poll` once per minute.
+
+Deployment can take a few minutes because the board runs Docker build/push, creates a Cloud Run revision, updates the public URL env var, grants Scheduler invoker access, and creates or updates the Scheduler job. The UI polls the deployment job and shows elapsed time plus recent log lines while it runs.
+
 The Google login flow does not create service account key files in this repository. User credentials are managed by `gcloud` under the host user's Cloud SDK config directory, and Dev Board runtime auth session logs are written under ignored runtime directories.
 
 ### Script Options

@@ -92,6 +92,12 @@ label {
   color: var(--ink);
 }
 
+.field-helper {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
 input,
 select,
 textarea {
@@ -683,6 +689,37 @@ textarea {
   line-height: 1.5;
 }
 
+.cloud-run-progress-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(214, 222, 239, 0.92);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.cloud-run-progress-panel.active {
+  border-color: rgba(42, 99, 255, 0.28);
+  box-shadow: 0 16px 32px rgba(42, 99, 255, 0.1);
+}
+
+.cloud-run-progress-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.cloud-run-progress-header p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.cloud-run-progress-log {
+  max-height: 180px;
+}
+
 .compact-heading {
   margin-bottom: 0;
 }
@@ -996,6 +1033,7 @@ textarea {
   .section-heading,
   .card-header,
   .stage-row,
+  .cloud-run-progress-header,
   .timeline-top,
   .kv-list > div {
     flex-direction: column;
