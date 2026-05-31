@@ -191,6 +191,16 @@ gcloud scheduler jobs pause poll-my-agent --location=us-central1
 gcloud scheduler jobs resume poll-my-agent --location=us-central1
 ```
 
+## Retirement Cleanup
+
+When an agent is retired from Dev Board, Dev Board now also cleans up matching Cloud Run resources recorded in its deployment history:
+
+- deletes the Cloud Scheduler polling job, if one was created
+- deletes the Cloud Run service and its revisions
+- best-effort deletes the recorded Artifact Registry image tag
+
+The cleanup uses the active `gcloud` credentials on the Dev Board host. If those credentials do not have permission to delete a resource, the retire response includes a Cloud Run cleanup warning so the resource can be removed manually.
+
 ## Cost Estimate
 
 | Component | Free Tier | Beyond Free Tier |

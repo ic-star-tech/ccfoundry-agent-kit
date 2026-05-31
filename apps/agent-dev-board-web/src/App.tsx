@@ -238,6 +238,12 @@ type RetireAgentResult = {
     status?: string;
     upstream?: Record<string, unknown>;
   };
+  cloud_run?: {
+    ok?: boolean;
+    actions?: Array<Record<string, unknown>>;
+    targets?: Array<Record<string, unknown>>;
+    error?: string;
+  };
   local_agent?: LocalAgentRuntime | null;
 };
 
@@ -2150,7 +2156,16 @@ export default function App() {
       }
       const payload = (await response.json()) as RetireAgentResult;
       const foundryStatus = textValue(payload.foundry?.status, "RETIRED");
-      setLocalAgentNotice(`Retired ${label} in Foundry (${foundryStatus}) and removed it from active Dev Board runtimes.`);
+      const cloudRunActions = payload.cloud_run?.actions ?? [];
+      const cloudRunSuffix =
+        cloudRunActions.length === 0
+          ? ""
+          : payload.cloud_run?.ok
+            ? ` Cloud Run cleanup removed ${cloudRunActions.length} resource action(s).`
+            : " Cloud Run cleanup needs review.";
+      setLocalAgentNotice(
+        `Retired ${label} in Foundry (${foundryStatus}) and removed it from active Dev Board runtimes.${cloudRunSuffix}`,
+      );
       if (selectedAgent === normalizedAgentName) {
         setHandshakeResult(null);
         setDeveloperTicket(null);

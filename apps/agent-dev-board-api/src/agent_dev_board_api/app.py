@@ -728,6 +728,18 @@ async def retire_local_agent(agent_name: str, request: RetireAgentRequest) -> di
             "message": "No Foundry registration was observed; retired local runtime only.",
         }
 
+    try:
+        cloud_run_cleanup = CLOUD_RUN_MANAGER.cleanup_agent(agent_name)
+    except Exception as exc:
+        logger.warning("Cloud Run cleanup failed for retired agent %s", agent_name, exc_info=exc)
+        cloud_run_cleanup = {
+            "ok": False,
+            "agent_name": agent_name,
+            "error": str(exc),
+            "actions": [],
+            "targets": [],
+        }
+
     local_runtime: dict[str, Any] | None = None
     if request.stop_local:
         try:
@@ -743,6 +755,7 @@ async def retire_local_agent(agent_name: str, request: RetireAgentRequest) -> di
         "ok": True,
         "agent_name": agent_name,
         "foundry": remote_result,
+        "cloud_run": cloud_run_cleanup,
         "local_agent": local_runtime,
     }
 

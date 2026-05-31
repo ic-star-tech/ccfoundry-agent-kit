@@ -37,6 +37,19 @@ def _run_command(args: list[str], *, timeout: float = 12.0) -> tuple[int, str, s
     return completed.returncode, completed.stdout.strip(), completed.stderr.strip()
 
 
+def _is_missing_resource_output(*parts: str) -> bool:
+    text = "\n".join(str(part or "") for part in parts).lower()
+    missing_markers = (
+        "not found",
+        "not_found",
+        "notfound",
+        "does not exist",
+        "could not find",
+        "no such",
+    )
+    return any(marker in text for marker in missing_markers)
+
+
 def _json_command(args: list[str], *, timeout: float = 12.0) -> Any:
     code, stdout, _ = _run_command(args, timeout=timeout)
     if code != 0 or not stdout:
@@ -397,6 +410,153 @@ class CloudRunManager:
         self._append_log(normalized, "[dev-board] cancel requested")
         self._update_job(normalized, status="cancelled")
         return self.get_deployment(normalized)
+
+    def cleanup_agent(self, agent_name: str, *, delete_images: bool = True) -> dict[str, Any]:
+        clean_agent_name = str(agent_name or "").strip()
+        if not clean_agent_name:
+            raise ValueError("agent_name is required")
+
+        deployments = [
+            job
+            for job in self.list_deployments(limit=500)
+            if str(job.get("agent_name") or "").strip() == clean_agent_name and not bool(job.get("dry_run"))
+        ]
+
+        with self._lock:
+            for job in deployments:
+                job_id = str(job.get("id") or "").strip()
+                process = self._processes.get(job_id)
+                if process and process.poll() is None:
+                    process.terminate()
+                    self._append_log(job_id, "[dev-board] cleanup requested; deployment process terminated")
+                    self._update_job(job_id, status="cancelled")
+
+        targets: dict[tuple[str, str, str], dict[str, str]] = {}
+        for job in deployments:
+            result = dict(job.get("result") or {})
+            service_name = str(job.get("service_name") or "").strip()
+            project = str(job.get("project") or "").strip()
+            region = str(job.get("region") or "").strip()
+            if not service_name or not project or not region:
+                continue
+            key = (project, region, service_name)
+            targets.setdefault(
+                key,
+                {
+                    "project": project,
+                    "region": region,
+                    "service_name": service_name,
+                    "scheduler_job": str(result.get("scheduler_job") or "").strip(),
+                    "image_tag": str(result.get("image_tag") or "").strip(),
+                },
+            )
+
+        actions: list[dict[str, Any]] = []
+        for target in targets.values():
+            project = target["project"]
+            region = target["region"]
+            service_name = target["service_name"]
+            scheduler_job = target.get("scheduler_job", "")
+            image_tag = target.get("image_tag", "")
+
+            if scheduler_job:
+                actions.append(
+                    self._cleanup_command(
+                        kind="scheduler_job",
+                        name=scheduler_job,
+                        args=[
+                            "gcloud",
+                            "scheduler",
+                            "jobs",
+                            "delete",
+                            scheduler_job,
+                            "--location",
+                            region,
+                            "--project",
+                            project,
+                            "--quiet",
+                        ],
+                        timeout=60,
+                    )
+                )
+
+            actions.append(
+                self._cleanup_command(
+                    kind="cloud_run_service",
+                    name=service_name,
+                    args=[
+                        "gcloud",
+                        "run",
+                        "services",
+                        "delete",
+                        service_name,
+                        "--region",
+                        region,
+                        "--project",
+                        project,
+                        "--quiet",
+                    ],
+                    timeout=90,
+                )
+            )
+
+            if delete_images and image_tag:
+                actions.append(
+                    self._cleanup_command(
+                        kind="artifact_image",
+                        name=image_tag,
+                        args=[
+                            "gcloud",
+                            "artifacts",
+                            "docker",
+                            "images",
+                            "delete",
+                            image_tag,
+                            "--delete-tags",
+                            "--project",
+                            project,
+                            "--quiet",
+                        ],
+                        timeout=90,
+                    )
+                )
+
+        ok = all(bool(action.get("ok")) for action in actions)
+        cleanup = {
+            "ok": ok,
+            "agent_name": clean_agent_name,
+            "targets": list(targets.values()),
+            "actions": actions,
+            "cleaned_at": _utcnow_iso(),
+        }
+        for job in deployments:
+            job_id = str(job.get("id") or "").strip()
+            if job_id:
+                try:
+                    self._update_job(job_id, cleanup=cleanup)
+                except Exception:
+                    pass
+        return cleanup
+
+    def _cleanup_command(
+        self,
+        *,
+        kind: str,
+        name: str,
+        args: list[str],
+        timeout: float,
+    ) -> dict[str, Any]:
+        code, stdout, stderr = _run_command(args, timeout=timeout)
+        missing = code != 0 and _is_missing_resource_output(stdout, stderr)
+        return {
+            "kind": kind,
+            "name": name,
+            "ok": code == 0 or missing,
+            "missing": missing,
+            "return_code": code,
+            "stdout": stdout[-1200:] if stdout else "",
+            "stderr": stderr[-1200:] if stderr else "",
+        }
 
     def _auth_path(self, session_id: str) -> Path:
         safe = re.sub(r"[^a-zA-Z0-9_-]", "", str(session_id or ""))
