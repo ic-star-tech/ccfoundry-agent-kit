@@ -127,7 +127,7 @@ class TestMandateChain:
     """Test the full Intent → Cart → Settlement mandate chain."""
 
     def test_full_chain(self) -> None:
-        # Step 1: Foundry Admin creates an Intent Mandate
+        # Step 1: Foundry host creates an Intent Mandate
         intent = create_intent_mandate(
             task_description="Implement binary search tree",
             budget_max=50.0,

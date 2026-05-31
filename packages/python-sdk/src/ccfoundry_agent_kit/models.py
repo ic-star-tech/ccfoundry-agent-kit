@@ -158,7 +158,7 @@ class FoundryMandate(BaseModel):
 
     Covers all three mandate types in a single envelope:
 
-    * ``intent``     – Foundry Admin's task brief with budget ceiling
+    * ``intent``     – Foundry host task brief with budget ceiling
     * ``cart``       – Agent's quote / bid with fee breakdown
     * ``settlement`` – Signed proof of verified payment
 

@@ -159,7 +159,7 @@ Those remain part of the Foundry control plane.
 
 ## Security Notes
 
-Agent Dev Board is a local harness, not a production service. Keep the default loopback binding for normal work. Remote Foundry URLs should use HTTPS; non-loopback plain HTTP requires `CCFOUNDRY_ALLOW_INSECURE_REMOTE_HTTP=true`. Bounty proxy endpoints only forward to loopback HTTP agent URLs.
+Agent Dev Board is a local harness, not a production service. Keep the default loopback binding for normal work. Remote Foundry URLs should use HTTPS; non-loopback plain HTTP requires `CCFOUNDRY_ALLOW_INSECURE_REMOTE_HTTP=true`. Job proxy endpoints only forward to loopback HTTP agent URLs.
 
 See [Security](security.md) for the full threat model and pre-publish checklist.
 

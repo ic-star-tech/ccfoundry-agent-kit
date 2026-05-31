@@ -1360,7 +1360,7 @@ async def bounty_execute(req: _BountyExecReq) -> dict:
             if stripe_info.get("stripe_payment_intent_id"):
                 steps_log.append({
                     "step": "payment",
-                    "output": f"💳 Stripe PaymentIntent: {stripe_info['stripe_payment_intent_id']}",
+                    "output": f"Payment provider reference: {stripe_info['stripe_payment_intent_id']}",
                     "tests_passed": True,
                 })
         else:

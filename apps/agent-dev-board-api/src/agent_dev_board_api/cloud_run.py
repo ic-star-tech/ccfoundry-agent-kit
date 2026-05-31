@@ -190,7 +190,7 @@ class CloudRunManager:
                 "version": docker_version,
             },
             "defaults": {
-                "project": project or "glassy-fort-497911-u3",
+                "project": project or "",
                 "region": region or "us-central1",
                 "artifact_repo": "ccfoundry-agents",
             },
@@ -336,7 +336,16 @@ class CloudRunManager:
         if not clean_agent_name:
             raise ValueError("agent_name is required")
 
-        clean_project = str(project or "").strip() or "glassy-fort-497911-u3"
+        clean_project = str(project or "").strip()
+        if not clean_project:
+            status = self.status()
+            clean_project = str(
+                (status.get("gcloud") or {}).get("project")
+                or (status.get("defaults") or {}).get("project")
+                or ""
+            ).strip()
+        if not clean_project:
+            raise ValueError("GCP project is required. Set a gcloud project or pass project.")
         clean_region = str(region or "").strip() or "us-central1"
         clean_memory = str(memory or "").strip() or "512Mi"
         clean_cpu = str(cpu or "").strip() or "1"

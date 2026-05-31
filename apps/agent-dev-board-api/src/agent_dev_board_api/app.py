@@ -149,7 +149,7 @@ class LocalAgentCreateRequest(BaseModel):
 
 class CloudRunDeployRequest(BaseModel):
     agent_name: str
-    project: str = "glassy-fort-497911-u3"
+    project: str = ""
     region: str = "us-central1"
     foundry_url: str = ""
     min_instances: int = 0

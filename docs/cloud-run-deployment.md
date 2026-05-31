@@ -103,7 +103,7 @@ The Google login flow does not create service account key files in this reposito
 Usage: ./scripts/deploy-cloudrun.sh <agent-name> [options]
 
 Options:
-  --project <id>       GCP project ID
+  --project <id>       GCP project ID (defaults to active gcloud project)
   --region <region>    Cloud Run region (default: us-central1)
   --agent-space <path> Path to agent_space directory to deploy
   --min-instances <n>  Minimum instances (default: 0 = scale-to-zero)

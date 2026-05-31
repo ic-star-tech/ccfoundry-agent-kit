@@ -275,9 +275,9 @@ const NAV_ITEMS: Array<{ id: BoardView; label: string; kicker: string }> = [
   { id: "guide", label: "Guided setup", kicker: "Create, onboard, and test end-to-end" },
   { id: "agent", label: "Agent card", kicker: "Runtime, model, and local agent management" },
   { id: "playground", label: "Agent playground", kicker: "Chat, transcript, and smoke tests" },
-  { id: "earnings", label: "Earnings", kicker: "Settlements, payments, and Stripe transfers" },
+  { id: "earnings", label: "Earnings", kicker: "Settlements, payments, and provider references" },
   { id: "skills", label: "Skill Store", kicker: "Browse, install, and manage agent skills" },
-  { id: "jobs", label: "Job Board", kicker: "Discover Foundry bounties and claim work" },
+  { id: "jobs", label: "Job Board", kicker: "Discover Foundry work and claim tasks" },
 ];
 
 const AGENT_CARD_TABS: Array<{ id: AgentCardTab; label: string; helper: string }> = [
@@ -976,7 +976,7 @@ function JobBoardPanel({
       <p className="eyebrow">Marketplace</p>
       <h2>🔍 Job Board</h2>
       <p className="muted" style={{ marginBottom: "1.25rem" }}>
-        Discover open bounties and requirements from a Foundry instance. Your agent can claim work and earn rewards.
+        Discover open work from a Foundry instance. Your agent can claim tasks and inspect settlement outcomes.
       </p>
 
       {/* Foundry URL + Controls */}
@@ -1034,7 +1034,7 @@ function JobBoardPanel({
             background: "rgba(255,255,255,.03)", border: "1px solid var(--border)",
           }}>
             <label style={{ fontSize: ".8rem", opacity: .7, display: "block", marginBottom: ".3rem" }}>
-              Foundry Admin JWT Token (from Foundry login)
+              Foundry access token
             </label>
             <input
               type="password"
@@ -1048,8 +1048,8 @@ function JobBoardPanel({
               }}
             />
             <p style={{ fontSize: ".7rem", opacity: .5, margin: ".4rem 0 0" }}>
-              Paste the JWT token from your Foundry admin session. Required for listing private bounties.
-              You can get this from the Foundry UI after login → API Token.
+              Paste a token from your Foundry login. Some hosts require it for non-public work listings.
+              You can get this from the Foundry UI after login, then API Token.
             </p>
           </div>
         ) : null}
@@ -1118,7 +1118,7 @@ function JobBoardPanel({
             {jobs.length}
           </span>
           <span style={{ fontSize: ".9rem" }}>
-            open {jobs.length === 1 ? "bounty" : "bounties"} available
+            open {jobs.length === 1 ? "work item" : "work items"} available
           </span>
         </div>
       ) : null}
@@ -1402,7 +1402,7 @@ function JobBoardPanel({
           textAlign: "center", padding: "3rem 1rem", opacity: .6,
         }}>
           <div style={{ fontSize: "3rem", marginBottom: ".5rem" }}>🔍</div>
-          <p style={{ fontSize: "1rem" }}>No open bounties found on this Foundry.</p>
+          <p style={{ fontSize: "1rem" }}>No open work found on this Foundry.</p>
           <p style={{ fontSize: ".85rem", opacity: .6 }}>
             Try a different Foundry URL or check back later.
           </p>
@@ -1411,7 +1411,7 @@ function JobBoardPanel({
 
       {loading && jobs.length === 0 ? (
         <div style={{ textAlign: "center", padding: "2rem", opacity: .5, fontSize: "1rem" }}>
-          ⏳ Searching for bounties…
+          ⏳ Searching for work…
         </div>
       ) : null}
     </>
@@ -1487,7 +1487,7 @@ export default function App() {
   const [cloudRunAuthLoading, setCloudRunAuthLoading] = useState(false);
   const [cloudRunAuthCode, setCloudRunAuthCode] = useState("");
   const [cloudRunForm, setCloudRunForm] = useState<CloudRunForm>({
-    project: "glassy-fort-497911-u3",
+    project: "",
     region: "us-central1",
     memory: "512Mi",
     cpu: "1",
@@ -2197,7 +2197,7 @@ export default function App() {
       const defaults = payload.defaults || {};
       setCloudRunForm((prev) => ({
         ...prev,
-        project: prev.project || textValue(defaults.project, "glassy-fort-497911-u3"),
+        project: prev.project || textValue(defaults.project),
         region: prev.region || textValue(defaults.region, "us-central1"),
       }));
     } catch (err) {
@@ -2868,7 +2868,7 @@ export default function App() {
                         <input
                           value={cloudRunForm.project}
                           onChange={(event) => updateCloudRunForm("project", event.target.value)}
-                          placeholder="glassy-fort-497911-u3"
+                          placeholder="your-gcp-project"
                         />
                       </label>
                       <label>
@@ -3783,7 +3783,7 @@ export default function App() {
                       <input
                         value={cloudRunForm.project}
                         onChange={(event) => updateCloudRunForm("project", event.target.value)}
-                        placeholder="glassy-fort-497911-u3"
+                        placeholder="your-gcp-project"
                       />
                     </label>
                     <label>
@@ -4348,9 +4348,9 @@ export default function App() {
                         const settledAt = String(s.settled_at || "");
                         const reason = String(s.reason || "");
                         const status = String(s.status || "settled");
-                        const stripeObj = (s.stripe || {}) as Record<string, unknown>;
-                        const stripeStatus = String(stripeObj.status || "");
-                        const stripePI = String(stripeObj.stripe_payment_intent_id || "");
+                        const paymentObj = (s.stripe || {}) as Record<string, unknown>;
+                        const paymentStatus = String(paymentObj.status || "");
+                        const paymentReference = String(paymentObj.stripe_payment_intent_id || "");
                         const checks = (s.verification_checks || []) as Array<Record<string, unknown>>;
 
                         return (
@@ -4406,24 +4406,17 @@ export default function App() {
                                   </strong>
                                 </div>
                               ) : null}
-                              {stripePI ? (
+                              {paymentReference ? (
                                 <div>
-                                  <span>Stripe</span>
+                                  <span>Payment provider</span>
                                   <strong>
-                                    <a
-                                      href={`https://dashboard.stripe.com/test/payments/${stripePI}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      style={{ color: "var(--accent)", textDecoration: "none" }}
-                                    >
-                                      {stripePI.slice(0, 24)}… ↗
-                                    </a>
+                                    {paymentReference.length > 24 ? `${paymentReference.slice(0, 24)}...` : paymentReference}
                                   </strong>
                                 </div>
-                              ) : stripeStatus ? (
+                              ) : paymentStatus ? (
                                 <div>
-                                  <span>Stripe</span>
-                                  <strong>{stripeStatus}</strong>
+                                  <span>Payment provider</span>
+                                  <strong>{paymentStatus}</strong>
                                 </div>
                               ) : null}
                             </div>

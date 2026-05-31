@@ -6,7 +6,7 @@
 #   ./scripts/deploy-cloudrun.sh <agent-name> [options]
 #
 # Options:
-#   --project <id>       GCP project ID  (default: glassy-fort-497911-u3)
+#   --project <id>       GCP project ID (defaults to active gcloud project)
 #   --region <region>    Cloud Run region (default: us-central1)
 #   --agent-space <path> Path to agent_space directory to deploy
 #   --min-instances <n>  Minimum instances (default: 0 = scale-to-zero)
@@ -23,7 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
-GCP_PROJECT="glassy-fort-497911-u3"
+GCP_PROJECT="${GCP_PROJECT:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-}}}"
 GCP_REGION="us-central1"
 AR_REPO="ccfoundry-agents"
 AGENT_SPACE=""
@@ -66,6 +66,19 @@ fi
 
 # Sanitize agent name for Cloud Run (lowercase, hyphens, max 63 chars)
 SERVICE_NAME="$(echo "$AGENT_NAME" | tr '[:upper:]' '[:lower:]' | tr '_' '-' | head -c 63)"
+
+if [[ -z "$GCP_PROJECT" ]] && command -v gcloud &>/dev/null; then
+    GCP_PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
+    if [[ "$GCP_PROJECT" == "(unset)" ]]; then
+        GCP_PROJECT=""
+    fi
+fi
+
+if [[ -z "$GCP_PROJECT" ]]; then
+    echo "Error: GCP project is required. Pass --project <id> or run: gcloud config set project <id>"
+    exit 1
+fi
+
 IMAGE_TAG="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/${SERVICE_NAME}:latest"
 SCHEDULER_JOB="poll-${SERVICE_NAME}"
 
