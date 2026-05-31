@@ -482,6 +482,7 @@ class LocalAgentManager:
             item["retire_result"] = {
                 "ok": bool(remote_result.get("ok")),
                 "foundry_url": str(remote_result.get("foundry_url") or ""),
+                "agent_name": str(remote_result.get("agent_name") or ""),
                 "status": str(remote_result.get("status") or ""),
             }
         self._replace_agent(registry, item)

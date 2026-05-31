@@ -388,6 +388,7 @@ async def _developer_route_probes(foundry_url: str) -> dict[str, dict[str, Any]]
 async def _retire_foundry_agent(
     *,
     agent: LiteAgentConfig,
+    foundry_agent_name: str,
     foundry_url: str,
     request: RetireAgentRequest,
 ) -> dict[str, Any]:
@@ -412,11 +413,13 @@ async def _retire_foundry_agent(
         "requested_by": "agent_dev_board",
         "source": "agent_dev_board",
     }
-    encoded_name = quote(agent.name, safe="")
+    target_agent_name = str(foundry_agent_name or "").strip() or agent.name
+    encoded_name = quote(target_agent_name, safe="")
     route_attempts: list[dict[str, Any]] = []
     failure_message = ""
     async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
         for method, route_path in (
+            ("POST", f"/api/developer/agents/{encoded_name}/retire"),
             ("DELETE", f"/api/my/agents/{encoded_name}"),
             ("POST", f"/api/agents/{encoded_name}/retire"),
         ):
@@ -455,6 +458,7 @@ async def _retire_foundry_agent(
                 return {
                     "ok": True,
                     "foundry_url": normalized,
+                    "agent_name": target_agent_name,
                     "route": url,
                     "route_attempts": route_attempts,
                     "upstream": upstream_payload,
@@ -687,8 +691,14 @@ async def retire_local_agent(agent_name: str, request: RetireAgentRequest) -> di
 
     bootstrap_state = await _agent_bootstrap_state(agent)
     foundry_url = _normalize_url(request.foundry_url or str(bootstrap_state.get("foundry_base_url") or ""))
+    foundry_agent_name = str(
+        bootstrap_state.get("registered_agent_name")
+        or bootstrap_state.get("invite_expected_name")
+        or agent.name
+    ).strip()
     remote_result = await _retire_foundry_agent(
         agent=agent,
+        foundry_agent_name=foundry_agent_name,
         foundry_url=foundry_url,
         request=request,
     )
