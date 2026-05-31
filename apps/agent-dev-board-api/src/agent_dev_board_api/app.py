@@ -354,8 +354,19 @@ async def _github_identity(token: str) -> dict[str, Any]:
 async def _agent_bootstrap_state(agent: LiteAgentConfig) -> dict[str, Any]:
     url = f"{agent.base_url.rstrip('/')}/foundry/bootstrap/state"
     async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
-        payload, _ = await _probe_json(client, url)
-    return payload if isinstance(payload, dict) else {"enabled": False}
+        payload, probe = await _probe_json(client, url)
+    if isinstance(payload, dict) and bool((probe or {}).get("ok")):
+        return payload
+
+    state_path = RUNTIME_DIR / "agents" / agent.name / ".foundry_bootstrap.json"
+    try:
+        disk_payload = json.loads(state_path.read_text())
+    except FileNotFoundError:
+        return {"enabled": False}
+    except Exception as exc:
+        logger.warning("Failed to read bootstrap state from %s", state_path, exc_info=exc)
+        return {"enabled": False}
+    return disk_payload if isinstance(disk_payload, dict) else {"enabled": False}
 
 
 async def _developer_route_probes(foundry_url: str) -> dict[str, dict[str, Any]]:
@@ -690,18 +701,32 @@ async def retire_local_agent(agent_name: str, request: RetireAgentRequest) -> di
         raise HTTPException(status_code=404, detail="Agent not found")
 
     bootstrap_state = await _agent_bootstrap_state(agent)
-    foundry_url = _normalize_url(request.foundry_url or str(bootstrap_state.get("foundry_base_url") or ""))
+    foundry_url = _normalize_url(str(bootstrap_state.get("foundry_base_url") or "") or request.foundry_url)
     foundry_agent_name = str(
         bootstrap_state.get("registered_agent_name")
         or bootstrap_state.get("invite_expected_name")
         or agent.name
     ).strip()
-    remote_result = await _retire_foundry_agent(
-        agent=agent,
-        foundry_agent_name=foundry_agent_name,
-        foundry_url=foundry_url,
-        request=request,
+    has_foundry_registration = bool(
+        str(bootstrap_state.get("registered_agent_name") or "").strip()
+        or str(bootstrap_state.get("registration_agent_id") or "").strip()
+        or str(bootstrap_state.get("invite_expected_name") or "").strip()
     )
+    if has_foundry_registration:
+        remote_result = await _retire_foundry_agent(
+            agent=agent,
+            foundry_agent_name=foundry_agent_name,
+            foundry_url=foundry_url,
+            request=request,
+        )
+    else:
+        remote_result = {
+            "ok": True,
+            "foundry_url": foundry_url,
+            "agent_name": "",
+            "status": "NOT_REGISTERED",
+            "message": "No Foundry registration was observed; retired local runtime only.",
+        }
 
     local_runtime: dict[str, Any] | None = None
     if request.stop_local:
