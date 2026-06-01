@@ -492,6 +492,27 @@ textarea {
   margin: 0;
 }
 
+.notification-box {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(214, 222, 239, 0.92);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.notification-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.notification-toggle {
+  min-width: 0;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;

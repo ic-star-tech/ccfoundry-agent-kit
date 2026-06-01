@@ -100,9 +100,20 @@ type DeveloperTicketResult = {
   developer_identity?: Record<string, unknown>;
   ticket?: Record<string, unknown>;
   claim_applied?: boolean;
+  apply_mode?: string;
   apply_result?: Record<string, unknown> | null;
   env_snippet?: string;
   message?: string;
+};
+
+type NotificationPreferences = {
+  email?: string;
+  bounty_success_email_enabled?: boolean;
+  status?: string;
+  foundry_url?: string;
+  synced_at?: string;
+  message?: string;
+  upstream?: Record<string, unknown>;
 };
 
 type DeveloperForm = {
@@ -220,6 +231,14 @@ type CloudRunDeployment = {
   finished_at?: string;
 };
 
+type SettlementsMeta = {
+  agent_name?: string;
+  foundry_agent_name?: string;
+  matched_agent_names?: string[];
+  total_available?: number;
+  foundry_url?: string;
+};
+
 type CloudRunAuthSession = {
   id: string;
   status: string;
@@ -235,6 +254,8 @@ type RetireAgentResult = {
   ok: boolean;
   agent_name: string;
   foundry?: {
+    ok?: boolean;
+    message?: string;
     status?: string;
     upstream?: Record<string, unknown>;
   };
@@ -274,7 +295,7 @@ const FOUNDRY_LOGO_URL = "/brand/cochiper-foundry.png";
 const NAV_ITEMS: Array<{ id: BoardView; label: string; kicker: string }> = [
   { id: "guide", label: "Guided setup", kicker: "Create, onboard, and test end-to-end" },
   { id: "agent", label: "Agent card", kicker: "Runtime, model, and local agent management" },
-  { id: "playground", label: "Agent playground", kicker: "Chat, transcript, and smoke tests" },
+  { id: "playground", label: "Local playground", kicker: "Debug a local runtime only" },
   { id: "earnings", label: "Earnings", kicker: "Settlements, payments, and provider references" },
   { id: "skills", label: "Skill Store", kicker: "Browse, install, and manage agent skills" },
   { id: "jobs", label: "Job Board", kicker: "Discover Foundry work and claim tasks" },
@@ -282,8 +303,8 @@ const NAV_ITEMS: Array<{ id: BoardView; label: string; kicker: string }> = [
 
 const AGENT_CARD_TABS: Array<{ id: AgentCardTab; label: string; helper: string }> = [
   { id: "overview", label: "Overview", helper: "Agent, mode, and quick status" },
-  { id: "runtimes", label: "Local runtimes", helper: "Create and manage local agents" },
-  { id: "cloud-run", label: "Cloud Run", helper: "Deploy selected agents to Google Cloud Run" },
+  { id: "runtimes", label: "Agent sources", helper: "Create sources and local debug runtimes" },
+  { id: "cloud-run", label: "Cloud Run", helper: "Deploy a source as a pull worker" },
   { id: "runtime", label: "Runtime LLM", helper: "Gateway source and dev overrides" },
   { id: "profile", label: "Profile", helper: "Manifest, skills, and template info" },
 ];
@@ -349,6 +370,52 @@ function displaySafeUrl(rawUrl: string, fallback = "n/a"): string {
 
 function boolValue(value: unknown): boolean {
   return value === true;
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function numberFromRecord(record: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (value === null || value === undefined || value === "") {
+      continue;
+    }
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function settlementNumber(settlement: Record<string, unknown>, keys: string[], fallback = 0): number {
+  const direct = numberFromRecord(settlement, keys);
+  if (direct !== null) {
+    return direct;
+  }
+  for (const nestedKey of ["settlement", "settlement_record", "verification_result"]) {
+    const nested = objectValue(settlement[nestedKey]);
+    const value = numberFromRecord(nested, keys);
+    if (value !== null) {
+      return value;
+    }
+  }
+  return fallback;
+}
+
+function settlementNetAmount(settlement: Record<string, unknown>): number {
+  return settlementNumber(settlement, ["net_payout_usd", "net_payout", "amount", "settlement_amount"], 0);
+}
+
+function settlementGrossAmount(settlement: Record<string, unknown>): number {
+  const net = settlementNetAmount(settlement);
+  return settlementNumber(settlement, ["gross_reward_usd", "gross_reward", "task_reward", "amount", "settlement_amount"], net);
+}
+
+function settlementResourceCost(settlement: Record<string, unknown>): number {
+  return settlementNumber(settlement, ["resource_cost_usd", "total_resource_cost_usd", "resource_cost"], 0);
 }
 
 function formatDuration(startedAt: string, finishedAt = ""): string {
@@ -1452,15 +1519,20 @@ export default function App() {
   const [ticketLoading, setTicketLoading] = useState(false);
   const [ticketError, setTicketError] = useState("");
   const [developerTicket, setDeveloperTicket] = useState<DeveloperTicketResult | null>(null);
+  const [notificationEmail, setNotificationEmail] = useState("");
+  const [notificationEnabled, setNotificationEnabled] = useState(true);
+  const [notificationLoading, setNotificationLoading] = useState(false);
+  const [notificationError, setNotificationError] = useState("");
+  const [notificationStatus, setNotificationStatus] = useState("");
   const [oauthLoading, setOauthLoading] = useState(false);
   const [foundryBootstrapSession, setFoundryBootstrapSession] = useState<FoundryBootstrapSession | null>(null);
   const [localAgentLoading, setLocalAgentLoading] = useState(false);
   const [localAgentError, setLocalAgentError] = useState("");
   const [retiringAgent, setRetiringAgent] = useState("");
   const [settlements, setSettlements] = useState<Array<Record<string, unknown>>>([]);
+  const [settlementsMeta, setSettlementsMeta] = useState<SettlementsMeta>({});
   const [settlementsLoading, setSettlementsLoading] = useState(false);
   const [settlementsError, setSettlementsError] = useState("");
-  const [settlementsTotalEarned, setSettlementsTotalEarned] = useState(0);
   const [earningsAgentFilter, setEarningsAgentFilter] = useState("__all__");
   const [localAgentNotice, setLocalAgentNotice] = useState("");
   const [guideRunTarget, setGuideRunTarget] = useState<GuideRunTarget>("local");
@@ -1505,9 +1577,11 @@ export default function App() {
     setHandshakeError("");
     setDeveloperTicket(null);
     setTicketError("");
+    setEarningsAgentFilter("__all__");
     void fetchSettlements();
     void probeHandshake(selectedAgent, foundryUrl);
     void refreshDeveloperContext(foundryUrl);
+    void loadNotificationPreferences(selectedAgent);
   }, [selectedAgent]);
 
   useEffect(() => {
@@ -1591,6 +1665,7 @@ export default function App() {
     textValue(developerGithub.login, "not detected"),
   );
   const developerSessionReady = Boolean(developerForm.developer_token.trim() || foundryBootstrapSession);
+  const developerAuthReady = developerSessionReady || boolValue(developerGithub.has_token);
   const foundryBrowserSessionReady = Boolean(foundryBootstrapSession);
   const claimInstalled = bootstrapHasClaim || boolValue(developerTicket?.claim_applied) || Boolean(textValue(bootstrapState.last_claimed_at));
   const approvalObserved = Boolean(textValue(bootstrapState.approved_at));
@@ -1608,7 +1683,7 @@ export default function App() {
     cloudRunCurrentJob?.agent_name === selectedAgent ? cloudRunCurrentJob : selectedCloudRunDeployment;
   const cloudRunDeploymentSucceeded = textValue(displayedCloudRunDeployment?.status) === "succeeded";
   const cloudRunPollObserved = Boolean(textValue(bootstrapState.last_polled_at));
-  const deploymentTargetReady = guideRunTarget === "cloud_run" ? cloudRunDeploymentSucceeded : Boolean(selectedLocalAgent);
+  const deploymentTargetReady = guideRunTarget === "cloud_run" ? cloudRunDeploymentSucceeded : playgroundReady;
   const smokeObserved = guideRunTarget === "cloud_run" ? cloudRunDeploymentSucceeded && cloudRunPollObserved : hasConversation;
   const cloudRunAuthenticated = Boolean(cloudRunStatus?.gcloud?.authenticated);
   const cloudRunAuthSessionStatus = textValue(cloudRunAuthSession?.status);
@@ -1996,7 +2071,7 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             foundry_url: normalizedFoundryUrl || foundryUrl,
-            agent_name: "",
+            agent_name: selectedAgent || "",
             limit: 50,
           }),
         },
@@ -2007,6 +2082,11 @@ export default function App() {
       const payload = (await response.json()) as {
         settlements: Array<Record<string, unknown>>;
         count: number;
+        total_available?: number;
+        agent_name?: string;
+        foundry_agent_name?: string;
+        matched_agent_names?: string[];
+        foundry_url?: string;
         error?: string;
       };
       if (payload.error) {
@@ -2014,15 +2094,17 @@ export default function App() {
       }
       const items = payload.settlements || [];
       setSettlements(items);
-      const total = items.reduce(
-        (sum: number, s: Record<string, unknown>) => sum + (Number(s.amount) || 0),
-        0,
-      );
-      setSettlementsTotalEarned(total);
+      setSettlementsMeta({
+        agent_name: payload.agent_name,
+        foundry_agent_name: payload.foundry_agent_name,
+        matched_agent_names: payload.matched_agent_names,
+        total_available: payload.total_available,
+        foundry_url: payload.foundry_url,
+      });
     } catch (err) {
       setSettlementsError(String(err));
       setSettlements([]);
-      setSettlementsTotalEarned(0);
+      setSettlementsMeta({});
     } finally {
       setSettlementsLoading(false);
     }
@@ -2054,7 +2136,7 @@ export default function App() {
         throw new Error(await readErrorMessage(response));
       }
       const payload = (await response.json()) as LocalAgentRuntime;
-      setLocalAgentNotice(`Created ${payload.label} on ${displaySafeUrl(payload.base_url)}.`);
+      setLocalAgentNotice(`Created source ${payload.label}. Choose local debug to start it, or deploy the source to Cloud Run.`);
       setCreateAgentForm((prev) => ({
         ...prev,
         name: "",
@@ -2123,14 +2205,12 @@ export default function App() {
       setLocalAgentError("Select an agent before retiring it.");
       return;
     }
-    if (!developerSessionReady) {
-      setLocalAgentError("Login with GitHub before retiring a Foundry agent.");
-      return;
-    }
     const localAgent = localAgents.find((agent) => agent.name === normalizedAgentName);
     const label = localAgent?.label || normalizedAgentName;
     const confirmed = window.confirm(
-      `Retire ${label}? Foundry will soft-retire the agent and Dev Board will remove it from the active runtime list.`,
+      developerSessionReady
+        ? `Retire ${label}? Foundry will soft-retire the agent and Dev Board will remove it from the active runtime list.`
+        : `Retire ${label}? Dev Board will remove it from the active runtime list. Foundry remote retire may require GitHub login later.`,
     );
     if (!confirmed) {
       return;
@@ -2156,6 +2236,11 @@ export default function App() {
       }
       const payload = (await response.json()) as RetireAgentResult;
       const foundryStatus = textValue(payload.foundry?.status, "RETIRED");
+      const foundryMessage = textValue(payload.foundry?.message);
+      const foundrySuffix =
+        payload.foundry?.ok === false
+          ? ` Foundry remote retire needs review${foundryMessage ? `: ${foundryMessage}` : "."}`
+          : ` Foundry status: ${foundryStatus}.`;
       const cloudRunActions = payload.cloud_run?.actions ?? [];
       const cloudRunSuffix =
         cloudRunActions.length === 0
@@ -2164,7 +2249,7 @@ export default function App() {
             ? ` Cloud Run cleanup removed ${cloudRunActions.length} resource action(s).`
             : " Cloud Run cleanup needs review.";
       setLocalAgentNotice(
-        `Retired ${label} in Foundry (${foundryStatus}) and removed it from active Dev Board runtimes.${cloudRunSuffix}`,
+        `Retired ${label} locally and removed it from active Dev Board runtimes.${foundrySuffix}${cloudRunSuffix}`,
       );
       if (selectedAgent === normalizedAgentName) {
         setHandshakeResult(null);
@@ -2452,6 +2537,79 @@ export default function App() {
     }
   }
 
+  async function loadNotificationPreferences(agentName = selectedAgent) {
+    if (!agentName) {
+      setNotificationEmail("");
+      setNotificationEnabled(true);
+      setNotificationStatus("");
+      setNotificationError("");
+      return;
+    }
+    setNotificationError("");
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/local-agents/${encodeURIComponent(agentName)}/notification-preferences`,
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as NotificationPreferences;
+      setNotificationEmail(textValue(payload.email));
+      setNotificationEnabled(payload.bounty_success_email_enabled !== false);
+      setNotificationStatus(textValue(payload.status, "not_configured"));
+    } catch (err) {
+      setNotificationStatus("");
+      setNotificationError(String(err));
+    }
+  }
+
+  async function syncNotificationPreferences(options: { silent?: boolean } = {}) {
+    if (!selectedAgent) {
+      return false;
+    }
+    if (notificationEnabled && !notificationEmail.trim()) {
+      if (!options.silent) {
+        setNotificationError("Enter an email address first.");
+      }
+      return false;
+    }
+    setNotificationLoading(true);
+    if (!options.silent) {
+      setNotificationError("");
+      setNotificationStatus("syncing");
+    }
+    try {
+      const response = await fetch(`${API_BASE}/api/developer/notification-preferences/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_name: selectedAgent,
+          foundry_url: foundryUrl,
+          developer_token: developerForm.developer_token,
+          github_token: developerForm.github_token,
+          email: notificationEmail,
+          bounty_success_email_enabled: notificationEnabled,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as { preferences?: NotificationPreferences };
+      const preferences = payload.preferences || {};
+      setNotificationEmail(textValue(preferences.email, notificationEmail));
+      setNotificationEnabled(preferences.bounty_success_email_enabled !== false);
+      setNotificationStatus(textValue(preferences.status, "synced"));
+      setNotificationError("");
+      return true;
+    } catch (err) {
+      setNotificationStatus("sync_failed");
+      setNotificationError(String(err));
+      return false;
+    } finally {
+      setNotificationLoading(false);
+    }
+  }
+
   async function requestBootstrapTicket() {
     if (!selectedAgent) {
       return;
@@ -2469,6 +2627,7 @@ export default function App() {
           github_token: developerForm.github_token,
           bootstrap_delivery: developerForm.bootstrap_delivery,
           force_rediscover: developerForm.force_rediscover,
+          runtime_target: guideRunTarget,
         }),
       });
       if (!response.ok) {
@@ -2476,6 +2635,9 @@ export default function App() {
       }
       const payload = (await response.json()) as DeveloperTicketResult;
       setDeveloperTicket(payload);
+      if (notificationEmail.trim() || !notificationEnabled) {
+        await syncNotificationPreferences({ silent: true });
+      }
       await Promise.all([
         probeHandshake(selectedAgent, foundryUrl),
         refreshDeveloperContext(foundryUrl),
@@ -2656,8 +2818,9 @@ export default function App() {
                   <div className="reply">
                     <strong>{selectedLocalAgent.label}</strong>
                     <p>
-                      Source runtime: <code>{selectedLocalAgent.name}</code> at{" "}
-                      <code>{displaySafeUrl(selectedLocalAgent.base_url)}</code>
+                      Source agent: <code>{selectedLocalAgent.name}</code>. Local debug runtime is{" "}
+                      <code>{textValue(selectedLocalAgent.status, "unknown")}</code> at{" "}
+                      <code>{displaySafeUrl(selectedLocalAgent.base_url)}</code>.
                     </p>
                   </div>
                 ) : null}
@@ -2726,7 +2889,8 @@ export default function App() {
                   <div>
                     <h4>Deploy target</h4>
                     <p className="muted">
-                      Keep the source on this host for local testing, or prepare a Cloud Run deployment for pull-based runtime.
+                      The source is the durable agent workspace. The active runtime target is either local debugging or a
+                      Cloud Run pull worker.
                     </p>
                   </div>
                 </div>
@@ -2736,8 +2900,8 @@ export default function App() {
                     className={`run-target-button ${guideRunTarget === "local" ? "active" : ""}`}
                     onClick={() => setGuideRunTarget("local")}
                   >
-                    <strong>Local Agent</strong>
-                    <span>Use the source runtime directly from this Dev Board host.</span>
+                    <strong>Local debug runtime</strong>
+                    <span>Run chat playground and fast local smoke tests from this Dev Board host.</span>
                   </button>
                   <button
                     type="button"
@@ -2748,8 +2912,8 @@ export default function App() {
                       void refreshCloudRunDeployments();
                     }}
                   >
-                    <strong>Google Cloud Run</strong>
-                    <span>Build the selected source into a public Cloud Run service.</span>
+                    <strong>Cloud Run pull worker</strong>
+                    <span>Build the selected source into a scheduled worker for Foundry tasks.</span>
                   </button>
                 </div>
 
@@ -2761,13 +2925,27 @@ export default function App() {
                         <strong>{textValue(selectedLocalAgent?.label, "create an agent source first")}</strong>
                       </div>
                       <div>
-                        <span>Local URL</span>
+                        <span>Debug URL</span>
                         <strong>{displaySafeUrl(textValue(selectedLocalAgent?.base_url), "not running")}</strong>
                       </div>
                       <div>
                         <span>Runtime status</span>
                         <strong>{textValue(selectedAgentEntry?.status, "offline")}</strong>
                       </div>
+                    </div>
+                    <div className="actions split-actions compact-actions">
+                      {selectedLocalAgent?.status === "running" ? (
+                        <button className="secondary" onClick={() => stopLocalAgent(selectedLocalAgent.name)} disabled={localAgentLoading}>
+                          Stop local runtime
+                        </button>
+                      ) : (
+                        <button onClick={() => selectedLocalAgent && startLocalAgent(selectedLocalAgent.name)} disabled={localAgentLoading || !selectedLocalAgent}>
+                          Start local runtime
+                        </button>
+                      )}
+                      <button className="secondary" onClick={() => setActiveView("playground")} disabled={!playgroundReady}>
+                        Open local playground
+                      </button>
                     </div>
                   </div>
                 ) : (
@@ -3032,6 +3210,45 @@ export default function App() {
                     {oauthLoading ? "Waiting for GitHub..." : "Login with GitHub"}
                   </button>
                 </div>
+                <div className="notification-box">
+                  <label>
+                    Completion email
+                    <input
+                      type="email"
+                      value={notificationEmail}
+                      onChange={(event) => setNotificationEmail(event.target.value)}
+                      placeholder="developer@example.com"
+                    />
+                  </label>
+                  <div className="notification-row">
+                    <label className="inline-toggle notification-toggle">
+                      <input
+                        type="checkbox"
+                        checked={notificationEnabled}
+                        onChange={(event) => setNotificationEnabled(event.target.checked)}
+                      />
+                      Bounty success emails
+                    </label>
+                    <button
+                      className="secondary"
+                      onClick={() => syncNotificationPreferences()}
+                      disabled={
+                        notificationLoading ||
+                        !selectedAgent ||
+                        !developerAuthReady ||
+                        (notificationEnabled && !notificationEmail.trim())
+                      }
+                    >
+                      {notificationLoading ? "Syncing..." : "Sync email"}
+                    </button>
+                  </div>
+                  {notificationStatus ? (
+                    <span className={`status-pill ${notificationStatus === "synced" ? "success" : "neutral"}`}>
+                      {notificationStatus}
+                    </span>
+                  ) : null}
+                  {notificationError ? <div className="error">{notificationError}</div> : null}
+                </div>
                 {developerError ? <div className="error">{developerError}</div> : null}
               </div>
             </section>
@@ -3043,19 +3260,19 @@ export default function App() {
                   <div>
                     <h4>Foundry onboarding</h4>
                     <p className="muted">
-                      This requests a bootstrap ticket, applies the discovery claim to the selected agent, and forces a new
-                      discover so Foundry sees the developer-linked runtime.
+                      This requests a bootstrap ticket and installs the discovery claim on the selected source. Local debug
+                      applies it immediately; Cloud Run carries it into the worker and uses it on the first poll.
                     </p>
                   </div>
                 </div>
                 {claimInstalled ? (
                   <div className="reply">
-                    <strong>Claim installed</strong>
+                    <strong>{developerTicket?.apply_mode === "source_state" ? "Claim installed on source" : "Claim installed"}</strong>
                     <p>Last claim time: {textValue(bootstrapState.last_claimed_at, "recorded by the agent")}</p>
                   </div>
                 ) : null}
                 <label>
-                  Target runtime
+                  Agent source
                   <select
                     value={selectedAgent}
                     onChange={(event) => setSelectedAgent(event.target.value)}
@@ -3071,7 +3288,7 @@ export default function App() {
                 </label>
                 <div className="kv-list compact-kv">
                   <div>
-                    <span>Selected agent</span>
+                    <span>Selected source</span>
                     <strong>{textValue(selectedAgentEntry?.label || selectedLocalAgent?.label, "create one first")}</strong>
                   </div>
                   <div>
@@ -3321,7 +3538,7 @@ export default function App() {
                     </div>
                   </div>
                   <p className="muted">
-                    {selectedManifest?.description || "Create or select a local agent to inspect its runtime, model, and bootstrap state."}
+                    {selectedManifest?.description || "Create or select an agent source to inspect local debug status, model, and bootstrap state."}
                   </p>
                   <label>
                     Agent
@@ -3350,10 +3567,15 @@ export default function App() {
                     <input value={username} onChange={(event) => setUsername(event.target.value)} />
                   </label>
                   <div className="actions">
-                    <button className="full-width" onClick={() => setActiveView("playground")} disabled={!selectedAgent}>
-                      Open playground
+                    <button className="full-width" onClick={() => setActiveView("playground")} disabled={!playgroundReady}>
+                      Open local playground
                     </button>
                   </div>
+                  {!playgroundReady && selectedAgent ? (
+                    <p className="muted">
+                      Playground is for local runtime debugging. Start the local runtime before using it.
+                    </p>
+                  ) : null}
                 </section>
 
                 <section className="panel">
@@ -3373,7 +3595,7 @@ export default function App() {
                   </div>
                   <div className="kv-list compact-kv">
                     <div>
-                      <span>Base URL</span>
+                      <span>Local debug URL</span>
                       <strong>{displaySafeUrl(textValue(selectedAgentEntry?.base_url), "n/a")}</strong>
                     </div>
                     <div>
@@ -3411,7 +3633,7 @@ export default function App() {
                   </p>
                   <div className="kv-list compact-kv">
                     <div>
-                      <span>Selected runtime</span>
+                      <span>Selected source</span>
                       <strong>{textValue(selectedLocalAgent?.label || selectedAgent, "none selected")}</strong>
                     </div>
                     <div>
@@ -3450,15 +3672,15 @@ export default function App() {
                   <div className="section-heading">
                     <div>
                       <p className="eyebrow">Template launcher</p>
-                      <h3>Create local agent</h3>
+                      <h3>Create agent source</h3>
                     </div>
                     <button className="secondary" onClick={() => refreshAgentInventory(selectedAgent)} disabled={localAgentLoading}>
                       {localAgentLoading ? "Refreshing..." : "Refresh inventory"}
                     </button>
                   </div>
                   <p className="muted">
-                    <code>npm run dev-board</code> now starts only the board. Create a local agent from a template, choose a
-                    stable name, and avoid collisions with old demo identities on Foundry.
+                    <code>npm run dev-board</code> starts the board. Create a durable source from a template, then start
+                    a local debug runtime or deploy that source to Cloud Run.
                   </p>
                   <label>
                     Template
@@ -3516,9 +3738,9 @@ export default function App() {
                   <div className="section-heading">
                     <div>
                       <p className="eyebrow">Runtime inventory</p>
-                      <h3>Local agents</h3>
+                      <h3>Agent sources</h3>
                     </div>
-                    <span className="muted">{localAgents.length} runtime(s)</span>
+                    <span className="muted">{localAgents.length} source(s)</span>
                   </div>
                   {localAgents.length === 0 ? (
                     <div className="empty-state">
@@ -3731,7 +3953,7 @@ export default function App() {
                     </div>
                   </div>
                   <label>
-                    Target runtime
+                    Source agent
                     <select
                       value={selectedAgent}
                       onChange={(event) => setSelectedAgent(event.target.value)}
@@ -3749,20 +3971,22 @@ export default function App() {
                     label="Foundry URL"
                     value={foundryUrl}
                     onChange={setFoundryUrl}
-                    helper="The deployed agent registers against this Foundry and uses pull transport."
+                    helper="The Cloud Run worker registers against this Foundry and uses pull transport."
                   />
                   <div className="kv-list compact-kv">
                     <div>
-                      <span>Instance</span>
-                      <strong>{textValue(selectedLocalAgent?.instance_dir, "select a local runtime")}</strong>
+                      <span>Source path</span>
+                      <strong>{textValue(selectedLocalAgent?.instance_dir, "select a source agent")}</strong>
                     </div>
                     <div>
                       <span>Template</span>
                       <strong>{textValue(selectedLocalAgent?.template_id, "n/a")}</strong>
                     </div>
                     <div>
-                      <span>Current local URL</span>
-                      <strong>{displaySafeUrl(textValue(selectedLocalAgent?.base_url), "n/a")}</strong>
+                      <span>Local debug runtime</span>
+                      <strong>
+                        {textValue(selectedLocalAgent?.status, "unknown")} · {displaySafeUrl(textValue(selectedLocalAgent?.base_url), "n/a")}
+                      </strong>
                     </div>
                   </div>
                 </section>
@@ -4127,7 +4351,7 @@ export default function App() {
             <section className="panel span-two">
               <div className="section-heading">
                 <div>
-                  <p className="eyebrow">Live playground</p>
+                  <p className="eyebrow">Local debug playground</p>
                   <h3>Transcript</h3>
                 </div>
                 <span className="muted">Current conversation id: {conversationId || "new session"}</span>
@@ -4136,7 +4360,9 @@ export default function App() {
                 {transcript.length === 0 ? (
                   <div className="empty-state">
                     <h4>No messages yet</h4>
-                    <p className="muted">Start with a direct question or test an inline call from this playground.</p>
+                    <p className="muted">
+                      Start a local runtime, then send a direct question to test the agent before deploying it as a worker.
+                    </p>
                   </div>
                 ) : null}
                 {transcript.map((entry, index) => (
@@ -4158,7 +4384,7 @@ export default function App() {
               <div className="section-heading">
                 <div>
                   <p className="eyebrow">Input</p>
-                  <h3>Send message</h3>
+                  <h3>Send to local runtime</h3>
                 </div>
               </div>
               <label>
@@ -4184,11 +4410,16 @@ export default function App() {
               />
               {!selectedAgent ? (
                 <p className="muted">
-                  Create a runtime in <strong>Agent card</strong> or choose one here before sending a message.
+                  Create an agent source in <strong>Agent card</strong> before sending a message.
+                </p>
+              ) : !playgroundReady ? (
+                <p className="muted">
+                  Playground is only for local runtime debugging. The selected local runtime is{" "}
+                  <strong>{textValue(selectedAgentEntry?.status, "offline")}</strong>.
                 </p>
               ) : null}
               <div className="actions">
-                <button onClick={() => void sendMessage()} disabled={loading || !selectedAgent}>
+                <button onClick={() => void sendMessage()} disabled={loading || !playgroundReady}>
                   {loading ? "Sending..." : "Send"}
                 </button>
               </div>
@@ -4260,7 +4491,7 @@ export default function App() {
               <div className="section-heading">
                 <div>
                   <p className="eyebrow">Earnings</p>
-                  <h3>Settlement Dashboard</h3>
+                  <h3>Settlement dashboard</h3>
                 </div>
                 <button
                   className="secondary"
@@ -4272,23 +4503,42 @@ export default function App() {
               </div>
 
               {(() => {
-                const uniqueAgents = [...new Set(settlements.map((s) => String(s.agent_name || "unknown")))];
+                const uniqueAgents = [
+                  ...new Set(
+                    settlements
+                      .map((s) => String(s.agent_name || settlementsMeta.foundry_agent_name || "unknown"))
+                      .filter(Boolean),
+                  ),
+                ];
                 const filtered = earningsAgentFilter === "__all__"
                   ? settlements
                   : settlements.filter((s) => String(s.agent_name || "") === earningsAgentFilter);
-                const filteredTotal = filtered.reduce(
-                  (sum, s) => sum + (Number(s.amount) || 0), 0,
-                );
+                const filteredTotal = filtered.reduce((sum, s) => sum + settlementNetAmount(s), 0);
+                const matchedNames = settlementsMeta.matched_agent_names || [];
                 return (
                 <>
                   <div className="dashboard-grid" style={{ marginBottom: "18px" }}>
                     <div className="metric-card">
-                      <span className="metric-label">Total earned</span>
+                      <span className="metric-label">Net earned</span>
                       <strong style={{ fontSize: "2rem", color: "var(--success)" }}>
                         ${filteredTotal.toFixed(2)}
                       </strong>
                       <span className="muted" style={{ fontSize: "0.84rem" }}>
                         {filtered.length} settlement{filtered.length !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    <div className="metric-card">
+                      <span className="metric-label">Selected source</span>
+                      <strong>{textValue(settlementsMeta.agent_name, textValue(selectedLocalAgent?.name, "all sources"))}</strong>
+                      <span className="muted" style={{ fontSize: "0.84rem" }}>
+                        {textValue(selectedLocalAgent?.status, "source")} local debug runtime
+                      </span>
+                    </div>
+                    <div className="metric-card">
+                      <span className="metric-label">Foundry identity</span>
+                      <strong>{textValue(settlementsMeta.foundry_agent_name, "not registered yet")}</strong>
+                      <span className="muted" style={{ fontSize: "0.84rem" }}>
+                        {matchedNames.length ? `matching ${matchedNames.join(", ")}` : "runtime-agnostic earnings"}
                       </span>
                     </div>
                     <div className="metric-card">
@@ -4308,13 +4558,13 @@ export default function App() {
                           maxWidth: "100%",
                         }}
                       >
-                        <option value="__all__">All Agents ({uniqueAgents.length})</option>
+                        <option value="__all__">All settlement names ({uniqueAgents.length})</option>
                         {uniqueAgents.map((name) => (
                           <option key={name} value={name}>{name}</option>
                         ))}
                       </select>
                       <span className="muted" style={{ fontSize: "0.84rem" }}>
-                        Foundry settlements
+                        Foundry settlement agent names
                       </span>
                     </div>
                   </div>
@@ -4339,7 +4589,9 @@ export default function App() {
                   {filtered.length > 0 ? (
                     <div className="timeline-grid single-column">
                       {filtered.map((s, index) => {
-                        const amount = Number(s.amount) || 0;
+                        const netAmount = settlementNetAmount(s);
+                        const grossAmount = settlementGrossAmount(s);
+                        const resourceCost = settlementResourceCost(s);
                         const currency = String(s.currency || "USD");
                         const settlementId = String(s.settlement_id || "");
                         const reqName = String(s.requirement_name || s.task_ref || "—");
@@ -4348,17 +4600,26 @@ export default function App() {
                         const settledAt = String(s.settled_at || "");
                         const reason = String(s.reason || "");
                         const status = String(s.status || "settled");
-                        const paymentObj = (s.stripe || {}) as Record<string, unknown>;
+                        const nestedSettlement = objectValue(s.settlement);
+                        const nestedRecord = objectValue(s.settlement_record);
+                        const verification = objectValue(s.verification_result);
+                        const paymentObj = objectValue(s.stripe || nestedSettlement.stripe || nestedRecord.stripe || verification.stripe);
                         const paymentStatus = String(paymentObj.status || "");
                         const paymentReference = String(paymentObj.stripe_payment_intent_id || "");
-                        const checks = (s.verification_checks || []) as Array<Record<string, unknown>>;
+                        const checks = (
+                          s.verification_checks ||
+                          nestedSettlement.verification_checks ||
+                          nestedRecord.verification_checks ||
+                          verification.verification_checks ||
+                          []
+                        ) as Array<Record<string, unknown>>;
 
                         return (
                           <div className="timeline-card" key={settlementId || `s-${index}`}>
                             <div className="timeline-top">
                               <div>
                                 <strong style={{ fontSize: "1.2rem", color: "var(--success)" }}>
-                                  +${amount.toFixed(2)} {currency}
+                                  +${netAmount.toFixed(2)} {currency}
                                 </strong>
                               </div>
                               <span className={`status-pill ${status === "settled" ? "success" : ""}`}>
@@ -4373,6 +4634,18 @@ export default function App() {
                               <div>
                                 <span>Agent</span>
                                 <strong>{agentName}</strong>
+                              </div>
+                              <div>
+                                <span>Gross reward</span>
+                                <strong>${grossAmount.toFixed(2)} {currency}</strong>
+                              </div>
+                              <div>
+                                <span>Resource cost</span>
+                                <strong>${resourceCost.toFixed(2)} {currency}</strong>
+                              </div>
+                              <div>
+                                <span>Net payout</span>
+                                <strong>${netAmount.toFixed(2)} {currency}</strong>
                               </div>
                               {moduleName ? (
                                 <div>

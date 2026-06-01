@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -36,6 +37,10 @@ SKILL_STORE = SkillStore()
 _LOCALHOST_ORIGIN_RE = r"^https?://(localhost|127(?:\.[0-9]{1,3}){3}|\[::1\])(:[0-9]+)?$"
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _DEFAULT_TRUSTED_FOUNDRY_HOSTS = {"foundry.cochiper.com", "foundry.cochiper.ai"}
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _env_truthy(name: str) -> bool:
@@ -112,6 +117,16 @@ class DeveloperBootstrapTicketRequest(BaseModel):
     github_token: str = ""
     bootstrap_delivery: str = "poll"
     force_rediscover: bool = True
+    runtime_target: str = "local"
+
+
+class DeveloperNotificationPreferencesSyncRequest(BaseModel):
+    agent_name: str
+    foundry_url: str = ""
+    developer_token: str = ""
+    github_token: str = ""
+    email: str = ""
+    bounty_success_email_enabled: bool = True
 
 
 class LocalAgentTemplate(BaseModel):
@@ -145,6 +160,7 @@ class LocalAgentCreateRequest(BaseModel):
     label: str = ""
     preferred_port: int | None = None
     foundry_url: str = ""
+    auto_start: bool = False
 
 
 class CloudRunDeployRequest(BaseModel):
@@ -440,15 +456,179 @@ async def _agent_bootstrap_state(agent: LiteAgentConfig) -> dict[str, Any]:
     if isinstance(payload, dict) and bool((probe or {}).get("ok")):
         return payload
 
-    state_path = RUNTIME_DIR / "agents" / agent.name / ".foundry_bootstrap.json"
+    source_state, _ = _read_agent_source_bootstrap_state(agent.name)
+    if source_state:
+        return _public_bootstrap_state(source_state)
+    return {"enabled": False}
+
+
+def _agent_source_item(agent_name: str) -> dict[str, Any]:
+    _, item = LOCAL_AGENT_MANAGER._find_agent(agent_name)
+    return item
+
+
+def _agent_source_state_path(agent_name: str) -> Path | None:
     try:
-        disk_payload = json.loads(state_path.read_text())
-    except FileNotFoundError:
-        return {"enabled": False}
+        item = _agent_source_item(agent_name)
+    except Exception:
+        return None
+    instance_dir = Path(str(item.get("instance_dir") or "")).expanduser()
+    if not str(instance_dir):
+        return None
+    return instance_dir / ".foundry_bootstrap.json"
+
+
+def _agent_source_notification_path(agent_name: str) -> Path | None:
+    try:
+        item = _agent_source_item(agent_name)
+    except Exception:
+        return None
+    instance_dir = Path(str(item.get("instance_dir") or "")).expanduser()
+    if not str(instance_dir):
+        return None
+    return instance_dir / ".foundry_notifications.json"
+
+
+def _read_agent_notification_preferences(agent_name: str) -> dict[str, Any]:
+    path = _agent_source_notification_path(agent_name)
+    if not path or not path.exists():
+        return {
+            "email": "",
+            "bounty_success_email_enabled": True,
+            "status": "not_configured",
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
-        logger.warning("Failed to read bootstrap state from %s", state_path, exc_info=exc)
-        return {"enabled": False}
-    return disk_payload if isinstance(disk_payload, dict) else {"enabled": False}
+        logger.warning("Failed to read notification preferences from %s", path, exc_info=exc)
+        return {
+            "email": "",
+            "bounty_success_email_enabled": True,
+            "status": "invalid",
+        }
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_agent_notification_preferences(agent_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    path = _agent_source_notification_path(agent_name)
+    if not path:
+        raise RuntimeError("Agent source notification path is unavailable")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {**payload, "path": str(path)}
+
+
+def _read_agent_source_bootstrap_state(agent_name: str) -> tuple[dict[str, Any], Path | None]:
+    candidates: list[Path] = []
+    source_path = _agent_source_state_path(agent_name)
+    if source_path:
+        candidates.append(source_path)
+    candidates.extend(
+        [
+            RUNTIME_DIR / "agents" / agent_name / ".foundry_bootstrap.json",
+            APP_DIR / "agents" / agent_name / ".foundry_bootstrap.json",
+        ]
+    )
+    seen: set[Path] = set()
+    for state_path in candidates:
+        resolved = state_path.resolve(strict=False)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if not resolved.exists():
+            continue
+        try:
+            disk_payload = json.loads(resolved.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Failed to read bootstrap state from %s", resolved, exc_info=exc)
+            continue
+        if isinstance(disk_payload, dict):
+            return disk_payload, resolved
+    return {}, None
+
+
+def _public_bootstrap_state(state: dict[str, Any]) -> dict[str, Any]:
+    safe = {
+        key: value
+        for key, value in dict(state or {}).items()
+        if key not in {"discovery_claim_token", "env_vars"}
+    }
+    env_vars = state.get("env_vars")
+    if not isinstance(env_vars, dict):
+        env_vars = {}
+    has_claim = bool(str(state.get("discovery_claim_token") or "").strip()) or bool(safe.get("has_discovery_claim"))
+    safe["enabled"] = bool(safe.get("enabled") or safe.get("foundry_base_url") or has_claim)
+    safe["has_discovery_claim"] = has_claim
+    safe["has_agent_secret"] = bool(safe.get("has_agent_secret") or str(env_vars.get("AGENT_SECRET") or "").strip())
+    safe["has_llm_api_key"] = bool(
+        safe.get("has_llm_api_key")
+        or str(env_vars.get("LLM_API_KEY") or "").strip()
+        or str(env_vars.get("OPENAI_API_KEY") or "").strip()
+    )
+    safe["has_llm_api_base"] = bool(
+        safe.get("has_llm_api_base")
+        or str(env_vars.get("LLM_API_BASE") or "").strip()
+        or str(env_vars.get("OPENAI_BASE_URL") or "").strip()
+    )
+    if safe.get("registration_status") == "APPROVED" and safe.get("approved_at"):
+        safe["approval_mode"] = "callback"
+    elif safe.get("registration_status") == "APPROVED":
+        safe["approval_mode"] = "inline_register"
+    else:
+        safe.setdefault("approval_mode", "pending")
+    return safe
+
+
+def _install_developer_claim_to_source(agent_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    state_path = _agent_source_state_path(agent_name)
+    if not state_path:
+        raise RuntimeError("Agent source state path is unavailable")
+    state: dict[str, Any] = {}
+    try:
+        raw_state = json.loads(state_path.read_text(encoding="utf-8"))
+        if isinstance(raw_state, dict):
+            state = raw_state
+    except FileNotFoundError:
+        state = {}
+    except Exception as exc:
+        logger.warning("Failed to read bootstrap state from %s before claim install", state_path, exc_info=exc)
+        state = {}
+
+    foundry_base_url = str(payload.get("foundry_base_url") or "").strip().rstrip("/")
+    public_base_url = str(payload.get("public_base_url") or "").strip().rstrip("/")
+    bootstrap_delivery = str(payload.get("bootstrap_delivery") or "poll").strip().lower() or "poll"
+    developer_identity = payload.get("developer_identity")
+    state["enabled"] = True
+    if foundry_base_url:
+        state["foundry_base_url"] = foundry_base_url
+    if public_base_url:
+        state["public_base_url"] = public_base_url
+    state["discovery_claim_token"] = str(payload.get("discovery_claim_token") or "").strip()
+    state["bootstrap_delivery"] = bootstrap_delivery
+    state["last_claimed_at"] = _utcnow_iso()
+    if isinstance(developer_identity, dict) and developer_identity:
+        state["developer_identity"] = developer_identity
+    if bool(payload.get("force_rediscover")):
+        for key in (
+            "discovery_id",
+            "discovery_status",
+            "last_discovery_at",
+            "invite_id",
+            "invite_status",
+            "invite_expected_name",
+            "last_polled_at",
+        ):
+            state[key] = None
+    state["last_error"] = None
+
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "ok": True,
+        "mode": "source_state",
+        "state_path": str(state_path),
+        "last_claimed_at": state["last_claimed_at"],
+    }
 
 
 async def _developer_route_probes(foundry_url: str) -> dict[str, dict[str, Any]]:
@@ -576,6 +756,56 @@ async def _retire_foundry_agent(
     )
 
 
+def _foundry_retire_failure_result(
+    *,
+    foundry_url: str,
+    foundry_agent_name: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    message = "Foundry remote retire failed; retired the local Dev Board runtime only."
+    upstream_message = ""
+    route_attempts: list[dict[str, Any]] = []
+    status_code: int | None = None
+    if isinstance(exc, HTTPException):
+        status_code = exc.status_code
+        detail = exc.detail
+        if isinstance(detail, dict):
+            raw_message = str(detail.get("message") or detail.get("detail") or "").strip()
+            if raw_message:
+                upstream_message = raw_message
+                message = raw_message
+            raw_attempts = detail.get("route_attempts")
+            if isinstance(raw_attempts, list):
+                route_attempts = [item for item in raw_attempts if isinstance(item, dict)]
+        elif isinstance(detail, str) and detail.strip():
+            upstream_message = detail.strip()
+            message = upstream_message
+    else:
+        raw_message = str(exc).strip()
+        if raw_message:
+            upstream_message = raw_message
+            message = raw_message
+
+    if upstream_message == "User no longer exists":
+        message = (
+            "Foundry login session is stale or points to a removed user. "
+            "The local runtime was retired; sign in again before retrying Foundry remote retire."
+        )
+
+    result = {
+        "ok": False,
+        "foundry_url": foundry_url,
+        "agent_name": foundry_agent_name,
+        "status": "REMOTE_RETIRE_FAILED",
+        "message": message,
+        "http_status_code": status_code,
+        "route_attempts": route_attempts,
+    }
+    if upstream_message and upstream_message != message:
+        result["upstream_message"] = upstream_message
+    return result
+
+
 def _developer_identity_from_context(git_context: dict[str, Any], github_identity: dict[str, Any]) -> dict[str, Any]:
     identity: dict[str, Any] = {}
     login = str(github_identity.get("login") or "").strip()
@@ -595,11 +825,122 @@ def _developer_identity_from_context(git_context: dict[str, Any], github_identit
     return identity
 
 
+async def _sync_developer_notification_preferences(
+    *,
+    agent: LiteAgentConfig,
+    foundry_url: str,
+    developer_token: str,
+    github_token: str,
+    email: str,
+    bounty_success_email_enabled: bool,
+) -> dict[str, Any]:
+    normalized_foundry_url = _normalize_url(foundry_url)
+    if not normalized_foundry_url:
+        raise HTTPException(status_code=400, detail="Foundry URL is required")
+
+    normalized_email = str(email or "").strip().lower()
+    enabled = bool(bounty_success_email_enabled)
+    if enabled and not normalized_email:
+        raise HTTPException(status_code=400, detail="Notification email is required")
+
+    git_context = _git_context()
+    resolved_github_token, github_token_source = _discover_github_token_for_foundry(
+        github_token,
+        normalized_foundry_url,
+    )
+    github_identity = await _github_identity(resolved_github_token)
+    github_identity["token_source"] = github_token_source
+    github_identity["has_token"] = bool(resolved_github_token)
+    developer_identity = _developer_identity_from_context(git_context, github_identity)
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    normalized_developer_token = str(developer_token or "").strip()
+    if normalized_developer_token:
+        headers["Authorization"] = f"Bearer {normalized_developer_token}"
+    if resolved_github_token:
+        headers["X-GitHub-Token"] = resolved_github_token
+    if not normalized_developer_token and not resolved_github_token:
+        raise HTTPException(status_code=400, detail="GitHub login is required before syncing notification email")
+
+    payload = {
+        "email": normalized_email,
+        "bounty_success_email_enabled": enabled,
+        "source": "dev_board",
+        "developer_identity": developer_identity,
+        "metadata": {
+            "agent_name": agent.name,
+            "agent_label": agent.label,
+            "agent_base_url": agent.base_url,
+            "foundry_url": normalized_foundry_url,
+            "git": git_context,
+            "github": {
+                "login": github_identity.get("login"),
+                "id": github_identity.get("id"),
+                "name": github_identity.get("name"),
+                "html_url": github_identity.get("html_url"),
+                "token_source": github_token_source,
+            },
+        },
+    }
+
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+        response = await client.post(
+            f"{normalized_foundry_url}/api/developer/notification-preferences",
+            headers=headers,
+            json=payload,
+        )
+    if not response.is_success:
+        detail = response.text
+        try:
+            raw_error = response.json()
+            if isinstance(raw_error, dict):
+                detail = str(raw_error.get("detail") or raw_error.get("message") or response.text)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=502,
+            detail=f"Foundry notification preference sync failed (status {response.status_code}): {detail}",
+        )
+
+    raw_result = response.json()
+    upstream = raw_result if isinstance(raw_result, dict) else {"value": raw_result}
+    local_preferences = _write_agent_notification_preferences(
+        agent.name,
+        {
+            "email": normalized_email,
+            "bounty_success_email_enabled": enabled,
+            "foundry_url": normalized_foundry_url,
+            "status": "synced",
+            "synced_at": _utcnow_iso(),
+            "developer_identity": developer_identity,
+            "github": {
+                "login": github_identity.get("login"),
+                "id": github_identity.get("id"),
+                "token_source": github_token_source,
+                "has_token": bool(resolved_github_token),
+            },
+            "upstream": upstream,
+        },
+    )
+    return {
+        "ok": True,
+        "foundry_url": normalized_foundry_url,
+        "preferences": local_preferences,
+        "upstream": upstream,
+        "github": {
+            "login": github_identity.get("login"),
+            "id": github_identity.get("id"),
+            "token_source": github_token_source,
+            "has_token": bool(resolved_github_token),
+        },
+    }
+
+
 async def _probe_json(client: httpx.AsyncClient, url: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     try:
         response = await client.get(url)
     except Exception as exc:
-        logger.warning("Probe request failed for %s", url, exc_info=exc)
+        logger.info("Probe request failed for %s: %s", url, exc)
         return None, {"ok": False, "url": url, "detail": "request_failed"}
 
     summary: dict[str, Any] = {
@@ -731,6 +1072,14 @@ async def list_local_agents(include_retired: bool = False) -> list[LocalAgentRun
     ]
 
 
+@app.get("/api/local-agents/{agent_name}/notification-preferences")
+async def get_local_agent_notification_preferences(agent_name: str) -> dict[str, Any]:
+    agents = _load_agents()
+    if agent_name not in agents:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return _read_agent_notification_preferences(agent_name)
+
+
 @app.post("/api/local-agents")
 async def create_local_agent(request: LocalAgentCreateRequest) -> LocalAgentRuntime:
     try:
@@ -740,9 +1089,11 @@ async def create_local_agent(request: LocalAgentCreateRequest) -> LocalAgentRunt
             label=request.label,
             preferred_port=request.preferred_port,
             foundry_url=request.foundry_url,
+            start=request.auto_start,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Local agent request is invalid") from exc
+        logger.info("Invalid local agent create request for %s: %s", request.name, exc)
+        raise HTTPException(status_code=400, detail=str(exc) or "Local agent request is invalid") from exc
     except RuntimeError as exc:
         logger.warning("Local agent creation failed for %s", request.name, exc_info=exc)
         raise HTTPException(status_code=409, detail="Local agent could not be created") from exc
@@ -796,12 +1147,32 @@ async def retire_local_agent(agent_name: str, request: RetireAgentRequest) -> di
         or str(bootstrap_state.get("invite_expected_name") or "").strip()
     )
     if has_foundry_registration:
-        remote_result = await _retire_foundry_agent(
-            agent=agent,
-            foundry_agent_name=foundry_agent_name,
-            foundry_url=foundry_url,
-            request=request,
-        )
+        try:
+            remote_result = await _retire_foundry_agent(
+                agent=agent,
+                foundry_agent_name=foundry_agent_name,
+                foundry_url=foundry_url,
+                request=request,
+            )
+        except Exception as exc:
+            remote_result = _foundry_retire_failure_result(
+                foundry_url=foundry_url,
+                foundry_agent_name=foundry_agent_name,
+                exc=exc,
+            )
+            if isinstance(exc, HTTPException):
+                logger.warning(
+                    "Foundry remote retire failed for %s (%s): %s; continuing with local retire",
+                    foundry_agent_name,
+                    exc.status_code,
+                    remote_result.get("message") or "remote retire failed",
+                )
+            else:
+                logger.warning(
+                    "Foundry remote retire failed for %s; continuing with local retire",
+                    foundry_agent_name,
+                    exc_info=exc,
+                )
     else:
         remote_result = {
             "ok": True,
@@ -1058,6 +1429,15 @@ async def probe_handshake(request: LiteHandshakeProbeRequest) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
         bootstrap_state, bootstrap_probe = await _probe_json(client, agent_state_url)
         agent_card, agent_card_probe = await _probe_json(client, agent_card_url)
+        if not bool((bootstrap_probe or {}).get("ok")):
+            source_state, source_state_path = _read_agent_source_bootstrap_state(agent.name)
+            if source_state:
+                bootstrap_state = _public_bootstrap_state(source_state)
+                bootstrap_probe = {
+                    "ok": True,
+                    "url": str(source_state_path or ""),
+                    "detail": "source_state_fallback",
+                }
 
         if not normalized_foundry_url and isinstance(bootstrap_state, dict):
             normalized_foundry_url = _normalize_url(str(bootstrap_state.get("foundry_base_url") or ""))
@@ -1130,6 +1510,27 @@ async def developer_context(request: DeveloperContextRequest) -> dict[str, Any]:
     }
 
 
+@app.post("/api/developer/notification-preferences/sync")
+async def sync_developer_notification_preferences(
+    request: DeveloperNotificationPreferencesSyncRequest,
+) -> dict[str, Any]:
+    agents = _load_agents()
+    agent = agents.get(request.agent_name)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    bootstrap_state = await _agent_bootstrap_state(agent)
+    normalized_foundry_url = _normalize_url(request.foundry_url or str(bootstrap_state.get("foundry_base_url") or ""))
+    return await _sync_developer_notification_preferences(
+        agent=agent,
+        foundry_url=normalized_foundry_url,
+        developer_token=request.developer_token,
+        github_token=request.github_token,
+        email=request.email,
+        bounty_success_email_enabled=request.bounty_success_email_enabled,
+    )
+
+
 @app.post("/api/developer/bootstrap-ticket")
 async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -> dict[str, Any]:
     agents = _load_agents()
@@ -1141,6 +1542,8 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
     normalized_foundry_url = _normalize_url(request.foundry_url or str(bootstrap_state.get("foundry_base_url") or ""))
     if not normalized_foundry_url:
         raise HTTPException(status_code=400, detail="Foundry URL is required")
+    runtime_target = str(request.runtime_target or "local").strip().lower() or "local"
+    install_to_source_only = runtime_target in {"cloud_run", "source", "source_state"}
 
     git_context = _git_context()
     github_token, github_token_source = _discover_github_token_for_foundry(
@@ -1164,6 +1567,7 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
         "agent_label": agent.label,
         "agent_base_url": agent.base_url,
         "bootstrap_delivery": str(request.bootstrap_delivery or "poll").strip().lower() or "poll",
+        "runtime_target": runtime_target,
         "developer_identity": developer_identity,
         "github": {
             "login": github_identity.get("login"),
@@ -1220,58 +1624,72 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
 
     claim_token = str(ticket_response.get("discovery_claim_token") or ticket_response.get("claim_token") or "").strip()
     apply_result: dict[str, Any] | None = None
+    apply_mode = ""
     if claim_token:
+        ticket_developer_identity = ticket_response.get("developer_identity")
+        if not isinstance(ticket_developer_identity, dict):
+            ticket_developer_identity = {}
+        claim_developer_identity = {
+            **developer_identity,
+            **ticket_developer_identity,
+            "developer_id": ticket_response.get("developer_id"),
+            "developer_label": ticket_response.get("developer_label"),
+            "ticket_id": ticket_response.get("ticket_id"),
+        }
         apply_payload = {
             "discovery_claim_token": claim_token,
             "bootstrap_delivery": str(ticket_response.get("bootstrap_delivery") or request.bootstrap_delivery or "poll"),
             "foundry_base_url": normalized_foundry_url,
             "public_base_url": agent.base_url,
-            "developer_identity": {
-                **developer_identity,
-                "developer_id": ticket_response.get("developer_id"),
-                "developer_label": ticket_response.get("developer_label"),
-                "ticket_id": ticket_response.get("ticket_id"),
-            },
+            "developer_identity": claim_developer_identity,
             "force_rediscover": bool(request.force_rediscover),
         }
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        if install_to_source_only:
             try:
-                response = await client.post(
-                    f"{agent.base_url.rstrip('/')}/foundry/bootstrap/developer-claim",
-                    json=apply_payload,
-                )
-            except httpx.TimeoutException as exc:
-                logger.warning("Developer claim apply timed out for %s", agent.base_url, exc_info=exc)
-                raise HTTPException(
-                    status_code=502,
-                    detail="Timed out while applying the discovery claim to the agent. The ticket may still have been issued; refresh the flow and retry if the claim is not installed.",
-                ) from exc
-            except httpx.HTTPError as exc:
-                logger.warning("Developer claim apply failed for %s", agent.base_url, exc_info=exc)
-                raise HTTPException(
-                    status_code=502,
-                    detail="Failed to reach the agent while applying the discovery claim.",
-                ) from exc
-        if not response.is_success:
-            logger.warning(
-                "Developer claim apply failed for %s with status %s",
-                agent.base_url,
-                response.status_code,
-            )
-            raise HTTPException(status_code=502, detail="Failed to apply discovery claim to agent")
-        raw_apply = response.json()
-        apply_result = raw_apply if isinstance(raw_apply, dict) else {"value": raw_apply}
+                apply_result = _install_developer_claim_to_source(agent.name, apply_payload)
+                apply_mode = "source_state"
+            except Exception as exc:
+                logger.warning("Developer claim source install failed for %s", agent.name, exc_info=exc)
+                raise HTTPException(status_code=502, detail="Failed to install discovery claim on agent source") from exc
+        else:
+            runtime_apply_failed = False
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                try:
+                    response = await client.post(
+                        f"{agent.base_url.rstrip('/')}/foundry/bootstrap/developer-claim",
+                        json=apply_payload,
+                    )
+                except (httpx.TimeoutException, httpx.HTTPError) as exc:
+                    runtime_apply_failed = True
+                    logger.warning("Developer claim apply failed for %s; falling back to source state", agent.base_url, exc_info=exc)
+            if not runtime_apply_failed and response.is_success:
+                raw_apply = response.json()
+                apply_result = raw_apply if isinstance(raw_apply, dict) else {"value": raw_apply}
+                apply_mode = "runtime"
+            else:
+                if not runtime_apply_failed:
+                    logger.warning(
+                        "Developer claim apply failed for %s with status %s; falling back to source state",
+                        agent.base_url,
+                        response.status_code,
+                    )
+                try:
+                    apply_result = _install_developer_claim_to_source(agent.name, apply_payload)
+                    apply_mode = "source_state"
+                except Exception as exc:
+                    logger.warning("Developer claim source fallback failed for %s", agent.name, exc_info=exc)
+                    raise HTTPException(status_code=502, detail="Failed to apply discovery claim to runtime or source") from exc
 
     env_lines = [
         "FOUNDRY_DISCOVERY_ENABLE=true",
         f"FOUNDRY_BASE_URL={normalized_foundry_url}",
-        f"FOUNDRY_AGENT_PUBLIC_URL={agent.base_url}",
+        f"FOUNDRY_AGENT_PUBLIC_URL={'<set by Cloud Run deploy>' if runtime_target == 'cloud_run' else agent.base_url}",
         f"FOUNDRY_BOOTSTRAP_DELIVERY={str(ticket_response.get('bootstrap_delivery') or request.bootstrap_delivery or 'poll')}",
     ]
     if claim_token:
         env_lines.append("FOUNDRY_DISCOVERY_CLAIM_TOKEN=<redacted>")
-    if developer_identity:
-        env_lines.append(f"FOUNDRY_DEVELOPER_IDENTITY_JSON={json.dumps(developer_identity, ensure_ascii=False)}")
+    if claim_token and isinstance(apply_payload.get("developer_identity"), dict):
+        env_lines.append(f"FOUNDRY_DEVELOPER_IDENTITY_JSON={json.dumps(apply_payload['developer_identity'], ensure_ascii=False)}")
     safe_ticket_response = dict(ticket_response)
     for secret_key in ("discovery_claim_token", "claim_token", "agent_secret", "api_key", "token"):
         if secret_key in safe_ticket_response:
@@ -1287,6 +1705,7 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
         "developer_identity": developer_identity,
         "ticket": safe_ticket_response,
         "claim_applied": bool(apply_result),
+        "apply_mode": apply_mode,
         "apply_result": apply_result,
         "env_snippet": "\n".join(env_lines),
     }
@@ -1673,65 +2092,167 @@ class SettlementsRequest(BaseModel):
     limit: int = 50
 
 
+def _read_json_dict(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _bootstrap_state_for_agent(agent_name: str) -> tuple[dict[str, Any], Path | None]:
+    normalized = str(agent_name or "").strip()
+    if not normalized:
+        return {}, None
+
+    candidates: list[Path] = []
+    try:
+        _, item = LOCAL_AGENT_MANAGER._find_agent(normalized)
+        instance_dir = Path(str(item.get("instance_dir") or "")).expanduser()
+        if str(instance_dir):
+            candidates.append(instance_dir / ".foundry_bootstrap.json")
+    except Exception:
+        pass
+
+    candidates.extend(
+        [
+            RUNTIME_DIR / "agents" / normalized / ".foundry_bootstrap.json",
+            APP_DIR / "agents" / normalized / ".foundry_bootstrap.json",
+        ]
+    )
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve(strict=False)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        state = _read_json_dict(resolved)
+        if state:
+            return state, resolved
+    return {}, None
+
+
+def _lower_name(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _settlement_agent_name(settlement: dict[str, Any]) -> str:
+    for key in ("agent_name", "agent", "payee_identity"):
+        value = str(settlement.get(key) or "").strip()
+        if value:
+            return value
+    for nested_key in ("settlement", "settlement_record", "verification_result", "accounting"):
+        nested = settlement.get(nested_key)
+        if isinstance(nested, dict):
+            value = str(nested.get("agent_name") or nested.get("payee_identity") or "").strip()
+            if value:
+                return value
+            for child_key in ("mandate", "settlement", "record"):
+                child = nested.get(child_key)
+                if isinstance(child, dict):
+                    value = str(child.get("agent_name") or child.get("payee_identity") or "").strip()
+                    if value:
+                        return value
+    return ""
+
+
+def _fallback_foundry_agent_name(source_agent_name: str) -> str:
+    normalized = str(source_agent_name or "").strip()
+    if not normalized:
+        return ""
+    if normalized.endswith("_agent_ext"):
+        return normalized
+    return f"{normalized}_agent_ext"
+
+
 @app.post("/api/settlements")
 async def proxy_settlements(request: SettlementsRequest) -> dict[str, Any]:
     """Proxy: fetch settlement records from Foundry for an agent."""
     foundry_url = _normalize_url(request.foundry_url)
     foundry_agent_name = ""
+    bootstrap_path = ""
 
-    # Try to resolve Foundry-registered agent name from bootstrap file
+    # Resolve the Foundry-registered identity from the selected source agent.
+    # This is the same identity used by both local debug runtimes and Cloud Run
+    # workers, so earnings are runtime-agnostic.
     if request.agent_name:
-        bootstrap_path = (
-            Path(__file__).resolve().parents[2]
-            / "agents"
-            / request.agent_name
-            / ".foundry_bootstrap.json"
-        )
-        if bootstrap_path.exists():
-            try:
-                bs = json.loads(bootstrap_path.read_text(encoding="utf-8"))
-                foundry_agent_name = str(bs.get("registered_agent_name") or "").strip()
-                if not foundry_url:
-                    foundry_url = _normalize_url(str(bs.get("foundry_base_url") or ""))
-            except Exception:
-                pass
+        bs, path = _bootstrap_state_for_agent(request.agent_name)
+        bootstrap_path = str(path or "")
+        foundry_agent_name = str(bs.get("registered_agent_name") or "").strip()
+        if not foundry_url:
+            foundry_url = _normalize_url(str(bs.get("foundry_base_url") or ""))
 
     if not foundry_url:
-        return {"settlements": [], "count": 0, "error": "No foundry_url provided"}
+        return {
+            "settlements": [],
+            "count": 0,
+            "error": "No foundry_url provided",
+            "agent_name": request.agent_name,
+            "foundry_agent_name": foundry_agent_name,
+            "matched_agent_names": [],
+        }
 
     try:
+        requested_limit = max(1, min(int(request.limit or 50), 500))
+        fetch_limit = max(requested_limit, 200) if request.agent_name else requested_limit
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 f"{foundry_url}/api/public/settlements",
-                params={"limit": request.limit},
+                params={"limit": fetch_limit},
             )
             if resp.status_code != 200:
                 return {
                     "settlements": [],
                     "count": 0,
                     "error": f"Foundry returned {resp.status_code}: {resp.text[:200]}",
+                    "agent_name": request.agent_name,
+                    "foundry_agent_name": foundry_agent_name,
+                    "matched_agent_names": [],
                 }
             data = resp.json()
             all_settlements = data.get("settlements", [])
+            if not isinstance(all_settlements, list):
+                all_settlements = []
 
-            # Build set of names to match: local name + Foundry-registered name
+            # Build set of names to match: source name + Foundry-registered name.
             match_names: set[str] = set()
             if request.agent_name:
-                match_names.add(request.agent_name.lower())
+                match_names.add(_lower_name(request.agent_name))
+                fallback_name = _fallback_foundry_agent_name(request.agent_name)
+                if fallback_name:
+                    match_names.add(_lower_name(fallback_name))
+                    if not foundry_agent_name:
+                        foundry_agent_name = fallback_name
             if foundry_agent_name:
-                match_names.add(foundry_agent_name.lower())
+                match_names.add(_lower_name(foundry_agent_name))
 
             if match_names:
                 filtered = [
                     s for s in all_settlements
-                    if str(s.get("agent_name") or "").lower() in match_names
+                    if isinstance(s, dict) and _lower_name(_settlement_agent_name(s)) in match_names
                 ]
-                # If no matches found with exact name, show all settlements (for demo convenience)
-                if not filtered:
-                    filtered = all_settlements
             else:
-                filtered = all_settlements
+                filtered = [s for s in all_settlements if isinstance(s, dict)]
 
-            return {"settlements": filtered, "count": len(filtered)}
+            limited = filtered[:requested_limit]
+            return {
+                "settlements": limited,
+                "count": len(limited),
+                "total_available": len(filtered),
+                "agent_name": request.agent_name,
+                "foundry_agent_name": foundry_agent_name,
+                "matched_agent_names": sorted(name for name in match_names if name),
+                "bootstrap_path": bootstrap_path,
+                "foundry_url": foundry_url,
+            }
     except Exception as exc:
-        return {"settlements": [], "count": 0, "error": str(exc)}
+        return {
+            "settlements": [],
+            "count": 0,
+            "error": str(exc),
+            "agent_name": request.agent_name,
+            "foundry_agent_name": foundry_agent_name,
+            "matched_agent_names": [],
+        }

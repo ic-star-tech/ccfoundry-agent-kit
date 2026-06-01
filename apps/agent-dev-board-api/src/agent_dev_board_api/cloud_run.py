@@ -377,6 +377,7 @@ class CloudRunManager:
             command.append("--skip-scheduler")
         if dry_run:
             command.append("--dry-run")
+        bootstrap_env = self._bootstrap_env_for_instance(instance_dir)
 
         job_id = uuid.uuid4().hex[:12]
         service_name = re.sub(r"[^a-z0-9-]+", "-", clean_agent_name.lower().replace("_", "-")).strip("-")[:63]
@@ -404,7 +405,7 @@ class CloudRunManager:
             },
         }
         self._save_job(job)
-        thread = threading.Thread(target=self._run_deployment, args=(job_id,), daemon=True)
+        thread = threading.Thread(target=self._run_deployment, args=(job_id, bootstrap_env), daemon=True)
         thread.start()
         return self.get_deployment(job_id)
 
@@ -674,7 +675,65 @@ class CloudRunManager:
         normalized["result"] = result
         return normalized
 
-    def _run_deployment(self, job_id: str) -> None:
+    @staticmethod
+    def _bootstrap_env_for_instance(instance_dir: Path) -> dict[str, str]:
+        state_path = instance_dir / ".foundry_bootstrap.json"
+        if not state_path.exists():
+            return {}
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        if not isinstance(state, dict):
+            return {}
+        result: dict[str, str] = {}
+        claim_token = str(state.get("discovery_claim_token") or "").strip()
+        if claim_token:
+            result["FOUNDRY_DISCOVERY_CLAIM_TOKEN"] = claim_token
+        discovery_nonce = str(state.get("discovery_nonce") or "").strip()
+        if discovery_nonce:
+            result["FOUNDRY_DISCOVERY_NONCE"] = discovery_nonce
+        registered_agent_name = str(state.get("registered_agent_name") or "").strip()
+        if registered_agent_name:
+            result["FOUNDRY_REGISTERED_AGENT_NAME"] = registered_agent_name
+        registration_status = str(state.get("registration_status") or "").strip()
+        if registration_status:
+            result["FOUNDRY_REGISTRATION_STATUS"] = registration_status
+        approved_at = str(state.get("approved_at") or "").strip()
+        if approved_at:
+            result["FOUNDRY_APPROVED_AT"] = approved_at
+        allocated_resources = state.get("allocated_resources")
+        if isinstance(allocated_resources, dict) and allocated_resources:
+            result["FOUNDRY_ALLOCATED_RESOURCES_JSON"] = json.dumps(
+                allocated_resources,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        developer_identity = state.get("developer_identity")
+        if isinstance(developer_identity, dict) and developer_identity:
+            result["FOUNDRY_DEVELOPER_IDENTITY_JSON"] = json.dumps(
+                developer_identity,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        env_vars = state.get("env_vars")
+        if isinstance(env_vars, dict):
+            for key in (
+                "AGENT_SECRET",
+                "LLM_MODEL",
+                "LLM_API_KEY",
+                "LLM_API_BASE",
+                "LLM_ALLOWED_MODELS_JSON",
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "FOUNDRY_ALLOWED_MODELS_JSON",
+            ):
+                value = str(env_vars.get(key) or "").strip()
+                if value:
+                    result[key] = value
+        return result
+
+    def _run_deployment(self, job_id: str, bootstrap_env: dict[str, str] | None = None) -> None:
         job = self.get_deployment(job_id)
         command = list(job.get("command") or [])
         self._update_job(job_id, status="running", started_at=_utcnow_iso())
@@ -686,7 +745,7 @@ class CloudRunManager:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                env={**os.environ},
+                env={**os.environ, **dict(bootstrap_env or {})},
             )
         except Exception as exc:
             self._update_job(job_id, status="failed", error=str(exc), return_code=1, finished_at=_utcnow_iso())
@@ -708,10 +767,15 @@ class CloudRunManager:
         normalized_latest = self._with_extracted_result(latest)
         result.update(dict(normalized_latest.get("result") or {}))
         next_status = "succeeded" if return_code == 0 else "failed"
+        error_message = "" if return_code == 0 else self._extract_failure_error(
+            list(latest.get("logs") or []),
+            return_code,
+        )
         self._update_job(
             job_id,
             status=next_status,
             return_code=return_code,
+            error=error_message,
             result=result,
             finished_at=_utcnow_iso(),
         )
@@ -729,3 +793,14 @@ class CloudRunManager:
                 if match:
                     return match.group(1).rstrip()
         return ""
+
+    @staticmethod
+    def _extract_failure_error(logs: list[str], return_code: int) -> str:
+        for line in reversed(logs):
+            clean_line = str(line or "").strip()
+            if not clean_line:
+                continue
+            lowered = clean_line.lower()
+            if "error" in lowered or "failed" in lowered or "denied" in lowered or "not found" in lowered:
+                return clean_line[-1000:]
+        return f"Cloud Run deploy script exited with {return_code}"

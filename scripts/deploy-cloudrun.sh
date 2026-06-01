@@ -103,6 +103,32 @@ if ! command -v gcloud &>/dev/null; then
     exit 1
 fi
 
+log "Ensuring Artifact Registry repository exists..."
+if $DRY_RUN; then
+    echo "[dry-run] gcloud artifacts repositories describe $AR_REPO --project=$GCP_PROJECT --location=$GCP_REGION"
+    echo "[dry-run] gcloud artifacts repositories create $AR_REPO --repository-format=docker --location=$GCP_REGION --project=$GCP_PROJECT --description=CCFoundry agent Cloud Run images --quiet"
+else
+    if REPO_DESCRIBE_OUTPUT="$(
+        gcloud artifacts repositories describe "$AR_REPO" \
+            --project="$GCP_PROJECT" \
+            --location="$GCP_REGION" \
+            --format="value(name)" 2>&1
+    )"; then
+        log "Artifact Registry repository ready: $AR_REPO"
+    elif echo "$REPO_DESCRIBE_OUTPUT" | grep -Eiq "not found|not_found|requested entity was not found"; then
+        log "Creating Artifact Registry repository: $AR_REPO"
+        gcloud artifacts repositories create "$AR_REPO" \
+            --repository-format=docker \
+            --location="$GCP_REGION" \
+            --project="$GCP_PROJECT" \
+            --description="CCFoundry agent Cloud Run images" \
+            --quiet
+    else
+        echo "$REPO_DESCRIBE_OUTPUT"
+        exit 1
+    fi
+fi
+
 # ── Step 1: Prepare build context ─────────────────────────────────────────────
 BUILD_DIR=$(mktemp -d "${REPO_ROOT}/.cloudrun-build-XXXXXX")
 trap 'rm -rf "$BUILD_DIR"' EXIT
@@ -166,6 +192,39 @@ DEPLOY_ARGS=(
     --set-env-vars="FOUNDRY_RUNTIME_TRANSPORT=pull"
     --set-env-vars="FOUNDRY_BOOTSTRAP_DELIVERY=poll"
 )
+
+EXTRA_ENV_VARS=()
+if [[ -n "${FOUNDRY_DISCOVERY_CLAIM_TOKEN:-}" ]]; then
+    EXTRA_ENV_VARS+=("FOUNDRY_DISCOVERY_CLAIM_TOKEN=${FOUNDRY_DISCOVERY_CLAIM_TOKEN}")
+fi
+if [[ -n "${FOUNDRY_DISCOVERY_NONCE:-}" ]]; then
+    EXTRA_ENV_VARS+=("FOUNDRY_DISCOVERY_NONCE=${FOUNDRY_DISCOVERY_NONCE}")
+fi
+if [[ -n "${FOUNDRY_DEVELOPER_IDENTITY_JSON:-}" ]]; then
+    EXTRA_ENV_VARS+=("FOUNDRY_DEVELOPER_IDENTITY_JSON=${FOUNDRY_DEVELOPER_IDENTITY_JSON}")
+fi
+for ENV_NAME in \
+    FOUNDRY_REGISTERED_AGENT_NAME \
+    FOUNDRY_REGISTRATION_STATUS \
+    FOUNDRY_APPROVED_AT \
+    FOUNDRY_ALLOCATED_RESOURCES_JSON \
+    AGENT_SECRET \
+    LLM_MODEL \
+    LLM_API_KEY \
+    LLM_API_BASE \
+    LLM_ALLOWED_MODELS_JSON \
+    OPENAI_API_KEY \
+    OPENAI_BASE_URL \
+    FOUNDRY_ALLOWED_MODELS_JSON
+do
+    if [[ -n "${!ENV_NAME:-}" ]]; then
+        EXTRA_ENV_VARS+=("${ENV_NAME}=${!ENV_NAME}")
+    fi
+done
+if [[ ${#EXTRA_ENV_VARS[@]} -gt 0 ]]; then
+    EXTRA_ENV_JOINED="$(IFS=@; echo "${EXTRA_ENV_VARS[*]}")"
+    DEPLOY_ARGS+=(--set-env-vars="^@^${EXTRA_ENV_JOINED}")
+fi
 
 if [[ -n "$FOUNDRY_URL" ]]; then
     DEPLOY_ARGS+=(--set-env-vars="FOUNDRY_BASE_URL=${FOUNDRY_URL}")

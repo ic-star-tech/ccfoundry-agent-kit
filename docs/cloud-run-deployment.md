@@ -79,7 +79,25 @@ The Dev Board UI exposes the same deploy path in two places:
 - `Guided setup -> Create agent source -> Deploy target -> Google Cloud Run`
 - `Agent card -> Cloud Run`
 
-Use it after creating an agent source workspace from a template. The UI will:
+Use it after creating an agent source workspace from a template. Creating the
+source prepares the durable workspace; it does not need to start a local
+runtime. In Dev Board
+language, the source and runtime are separate things:
+
+- **Agent source**: the durable local instance directory containing
+  `agent_space`, skills, bootstrap state, and deployment inputs.
+- **Local debug runtime**: a local process started from that source. It is for
+  playground chat and development smoke tests.
+- **Cloud Run pull worker**: a deployed runtime built from the same source. It
+  handles Foundry polling, task execution, and bounty settlement. It does not
+  use the local playground path.
+
+The active runtime target should be treated as mutually exclusive for testing
+purposes: choose local when debugging interactively, or Cloud Run when verifying
+the production pull worker. Cloud Run smoke tests check service health,
+Scheduler, and `/foundry/poll`; they do not replace the local playground.
+
+The UI will:
 
 1. Check whether `gcloud` and Docker are available on the Dev Board API host
 2. Show the active Google account, project, and region
@@ -89,7 +107,12 @@ Use it after creating an agent source workspace from a template. The UI will:
 6. Start the real deploy script asynchronously and stream job logs into the panel
 7. Smoke-test Cloud Run by checking deployment status, Scheduler, and the latest bootstrap poll
 
-The UI uses the selected agent instance directory as the `--agent-space` input, so installed Skill Store resources are included in the Cloud Run image. If `gcloud` is not authenticated, use the `Google Cloud login` action in Dev Board or run `gcloud auth login --no-launch-browser` on the machine hosting the Dev Board API, then refresh Cloud Run status. On GCE/GVM, an attached service account also works if it has sufficient Cloud Run, Artifact Registry, and Cloud Scheduler permissions.
+The UI uses the selected agent instance directory as the `--agent-space` input, so installed Skill Store resources are included in the Cloud Run image. The Foundry bootstrap claim is source-level state: Dev Board can write it to `.foundry_bootstrap.json` without a running local process, and the deploy job passes that claim into Cloud Run for discovery on the first poll. If `gcloud` is not authenticated, use the `Google Cloud login` action in Dev Board or run `gcloud auth login --no-launch-browser` on the machine hosting the Dev Board API, then refresh Cloud Run status. On GCE/GVM, an attached service account also works if it has sufficient Cloud Run, Artifact Registry, and Cloud Scheduler permissions.
+
+Earnings are runtime-agnostic. Dev Board reads settlement records from Foundry
+for the selected source agent's registered Foundry identity, so bounty earnings
+from a Cloud Run worker are shown in the same Earnings view as local test
+settlements.
 
 The region field offers quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), but you can type another valid Cloud Run region ID. The poll schedule is a Cloud Scheduler cron expression; the default `*/5 * * * *` triggers `POST /foundry/poll` every 5 minutes. Use `* * * * *` only when you need one-minute polling.
 

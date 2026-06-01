@@ -43,8 +43,9 @@ CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGINS=http://192.168.1.10:3000
 
 Its purpose is to make agent-side development and Foundry bootstrap debugging easy:
 
-- create and manage local agents
-- deploy a selected local agent to Google Cloud Run
+- create and manage agent sources
+- run a local debug runtime and use the playground against that local process
+- deploy a selected source agent to Google Cloud Run
 - inspect manifests and runtime metadata
 - send direct or inline chat requests
 - apply temporary LLM overrides
@@ -72,19 +73,25 @@ If an existing agent was created before a resource-bearing skill copied its reso
 
 ## Cloud Run Deployment
 
-The guided setup flow separates the agent source from the runtime target:
+The guided setup flow separates the **agent source** from the **runtime target**:
 
-1. Create an agent source from a template, with an optional `Load skills` jump to Skill Store
-2. Choose the deploy target: `Local Agent` or `Google Cloud Run`
+1. Create an agent source from a template, with an optional `Load skills` jump to Skill Store. This creates the durable workspace only; it does not have to start a local runtime.
+2. Choose the runtime target: `Local debug runtime` or `Cloud Run pull worker`
 3. Log in to Foundry with GitHub
 4. Request the Foundry bootstrap claim
 5. Wait for Foundry onboarding
 6. Run the appropriate smoke test
 7. Open Foundry to test the linked agent
 
+Step 3 also lets the developer sync a bounty-success email preference to Foundry. The preference belongs to the developer identity, while the local file copy lives with the selected agent source for Dev Board convenience. Successful bounty settlement emails include completion status, resource costs, net payout, and Stripe references. See [Foundry Bounty Email Notifications](foundry-bounty-email-notifications.md).
+
 When `Google Cloud Run` is selected, step 2 shows Cloud Run preflight, Google Cloud login, project/region settings, dry-run, and deploy controls. The region field has quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), while still accepting another valid Cloud Run region ID. The default poll schedule is `*/5 * * * *`, which keeps scale-to-zero agents responsive without producing one request per minute for every test agent.
 
-The real deploy is intentionally gated until the Foundry claim is installed so the Cloud Run image contains the agent's current claimed source workspace. Deployment can take a few minutes while Docker builds, pushes to Artifact Registry, Cloud Run creates a revision, and Cloud Scheduler is configured; the UI shows elapsed time plus the latest deployment logs. The Cloud Run smoke test checks deployment status, Scheduler, and the latest bootstrap poll instead of using the local playground chat path.
+The real deploy is intentionally gated until the Foundry claim is installed on the selected source. If a local debug runtime is running, Dev Board can apply the claim to that runtime immediately; for Cloud Run, Dev Board writes the claim to the source bootstrap state and the deployment passes it into the worker for the first poll. A local runtime is not required for the Cloud Run bootstrap path. Deployment can take a few minutes while Docker builds, pushes to Artifact Registry, Cloud Run creates a revision, and Cloud Scheduler is configured; the UI shows elapsed time plus the latest deployment logs. The Cloud Run smoke test checks deployment status, Scheduler, and the latest bootstrap poll instead of using the local playground chat path.
+
+The local playground is only for local runtime debugging. Cloud Run workers are validated through deployment status, Scheduler, `/foundry/poll`, invocation results, and settlement records.
+
+Earnings are tied to the Foundry-registered agent identity, not to where the runtime happened to execute. The Earnings view resolves the selected source agent's registered Foundry name and shows settlements from local debug runs and Cloud Run bounty runs under that same identity.
 
 The `Agent card -> Cloud Run` tab exposes the same headless Cloud Run deploy flow from [Cloud Run Deployment](cloud-run-deployment.md). It checks local `gcloud` / Docker status, shows the active Google account and project, and starts an asynchronous deployment job for the selected agent.
 
@@ -111,14 +118,17 @@ Retirement is modeled as a soft-retire request rather than a hard delete: histor
 - `apps/agent-dev-board-api`
   A small FastAPI service that creates local agents from templates, proxies requests to configured local agents, talks to Foundry-side developer bootstrap endpoints, and launches Cloud Run deployment jobs.
 - `apps/agent-dev-board-web`
-  A React UI with three top-level views:
+  A React UI with top-level views for:
   - guided setup
   - agent card
-  - agent playground
+  - local playground
+  - earnings
+  - skill store
+  - job board
 
   Inside `agent card`, the current tabs are:
   - overview
-  - local runtimes
+  - agent sources
   - Cloud Run
   - runtime LLM
   - profile
@@ -143,6 +153,7 @@ For developer bootstrap, the board can:
 - default to `https://foundry.cochiper.com`, while also exposing quick presets for `https://foundry.cochiper.ai` and custom Foundry URLs
 - call Foundry `bootstrap-ticket` endpoints
 - install the returned `discovery_claim_token`, Foundry URL, and public base URL into a running agent
+- sync a developer bounty-success email preference to Foundry
 
 In the current browser flow, GitHub is the only supported developer sign-in method.
 

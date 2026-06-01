@@ -424,6 +424,7 @@ class LocalAgentManager:
         label: str = "",
         preferred_port: int | None = None,
         foundry_url: str = "",
+        start: bool = False,
     ) -> dict[str, Any]:
         template = self._validated_template(template_id)
         normalized_name = _slugify(name)
@@ -433,7 +434,13 @@ class LocalAgentManager:
         registry = self._load_registry()
         for existing in registry.get("agents", []):
             if _slugify(existing.get("name")) == normalized_name:
-                raise ValueError(f"Local agent '{normalized_name}' already exists")
+                status = str(existing.get("status") or "unknown").strip().lower() or "unknown"
+                if status == "retired":
+                    raise ValueError(
+                        f"Local agent '{normalized_name}' is retired and cannot be reused. "
+                        "Retired local agent names are kept for audit; create a new agent with a different name."
+                    )
+                raise ValueError(f"Local agent '{normalized_name}' already exists with status '{status}'")
 
         reserved_ports = {
             int(item.get("port") or 0)
@@ -458,7 +465,10 @@ class LocalAgentManager:
             "pid": None,
             "status": "stopped",
         }
-        item = self._spawn_agent(item)
+        env_path = self._write_env_file(item)
+        item["env_path"] = str(env_path)
+        if start:
+            item = self._spawn_agent(item)
         registry.setdefault("agents", []).append(item)
         self._save_registry(registry)
         self._sync_agents_file()
