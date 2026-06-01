@@ -1693,12 +1693,14 @@ export default function App() {
   const cloudRunDeploymentActive = ["queued", "running"].includes(cloudRunDeploymentStatus);
   const cloudRunDeploymentStarted = Boolean(displayedCloudRunDeployment && !displayedCloudRunDeployment.dry_run);
   const cloudRunClaimReady = claimInstalled || cloudRunDeploymentStarted;
+  const cloudRunNeedsSourceClaim = !cloudRunClaimReady;
+  const cloudRunCanInstallSourceClaim = cloudRunNeedsSourceClaim && developerSessionReady;
   const cloudRunDeployBlockReason = !selectedLocalAgent
     ? "Create or select an agent source first."
     : !cloudRunAuthenticated
       ? "Google Cloud login is required before Cloud Run deployment."
-      : !cloudRunClaimReady
-        ? "Foundry claim is not installed yet. Complete GitHub login, then request a bootstrap ticket in step 4."
+      : cloudRunNeedsSourceClaim && !developerSessionReady
+        ? "GitHub login is required so Dev Board can install the Foundry source claim before deployment."
         : "";
   const cloudRunDeployButtonLabel = cloudRunDeploying
     ? "Starting..."
@@ -1706,8 +1708,8 @@ export default function App() {
       ? "Deploy after source"
       : !cloudRunAuthenticated
         ? "Deploy after Google login"
-        : !cloudRunClaimReady
-          ? "Deploy after Foundry claim"
+        : cloudRunNeedsSourceClaim
+          ? "Install claim and deploy"
           : "Deploy to Cloud Run";
   const cloudRunDeploymentLogs = displayedCloudRunDeployment?.logs ?? [];
   const latestCloudRunDeploymentLogs = cloudRunDeploymentLogs.slice(-8);
@@ -2455,6 +2457,20 @@ export default function App() {
     }
   }
 
+  async function deployCloudRunAfterSourceClaim(dryRun: boolean) {
+    if (!dryRun && !cloudRunClaimReady) {
+      if (!developerSessionReady) {
+        setTicketError("GitHub login is required before installing the Foundry source claim.");
+        return;
+      }
+      const claimReady = await requestBootstrapTicket();
+      if (!claimReady) {
+        return;
+      }
+    }
+    await deployCloudRun(dryRun);
+  }
+
   async function cancelCloudRunDeployment() {
     if (!cloudRunCurrentJob) {
       return;
@@ -2610,9 +2626,9 @@ export default function App() {
     }
   }
 
-  async function requestBootstrapTicket() {
+  async function requestBootstrapTicket(): Promise<boolean> {
     if (!selectedAgent) {
-      return;
+      return false;
     }
     setTicketLoading(true);
     setTicketError("");
@@ -2642,12 +2658,14 @@ export default function App() {
         probeHandshake(selectedAgent, foundryUrl),
         refreshDeveloperContext(foundryUrl),
       ]);
+      return true;
     } catch (err) {
       if (err instanceof TypeError) {
         setTicketError(`Dev Board API did not respond at ${API_BASE}. Check that port ${API_PORT} is reachable from this browser.`);
       } else {
         setTicketError(String(err));
       }
+      return false;
     } finally {
       setTicketLoading(false);
     }
@@ -2967,7 +2985,7 @@ export default function App() {
                         {cloudRunStatus?.docker?.installed ? "docker available" : "docker missing"}
                       </span>
                       <span className={`chip ${cloudRunClaimReady ? "tone-success" : "tone-warn"}`}>
-                        {cloudRunClaimReady ? "claim ready" : "claim needed before deploy"}
+                        {cloudRunClaimReady ? "claim ready" : cloudRunCanInstallSourceClaim ? "claim installs on deploy" : "claim needed before deploy"}
                       </span>
                     </div>
                     <div className="kv-list compact-kv">
@@ -3110,7 +3128,7 @@ export default function App() {
                         Dry run Cloud Run
                       </button>
                       <button
-                        onClick={() => deployCloudRun(false)}
+                        onClick={() => deployCloudRunAfterSourceClaim(false)}
                         disabled={cloudRunDeploying || Boolean(cloudRunDeployBlockReason)}
                       >
                         {cloudRunDeployButtonLabel}
@@ -3258,10 +3276,10 @@ export default function App() {
                 <div className="step-header">
                   <span className="step-index">4</span>
                   <div>
-                    <h4>Foundry onboarding</h4>
+                    <h4>Install Foundry source claim</h4>
                     <p className="muted">
-                      This requests a bootstrap ticket and installs the discovery claim on the selected source. Local debug
-                      applies it immediately; Cloud Run carries it into the worker and uses it on the first poll.
+                      This requests a bootstrap ticket and installs the discovery claim on the selected source before runtime
+                      launch. Local debug applies it immediately; Cloud Run carries it into the worker and uses it on the first poll.
                     </p>
                   </div>
                 </div>
@@ -3306,7 +3324,7 @@ export default function App() {
                   {guideRunTarget === "cloud_run" ? (
                     <button
                       className="secondary"
-                      onClick={() => deployCloudRun(false)}
+                      onClick={() => deployCloudRunAfterSourceClaim(false)}
                       disabled={cloudRunDeploying || Boolean(cloudRunDeployBlockReason)}
                     >
                       {cloudRunDeployButtonLabel}
@@ -4071,7 +4089,7 @@ export default function App() {
                       Dry run
                     </button>
                     <button
-                      onClick={() => deployCloudRun(false)}
+                      onClick={() => deployCloudRunAfterSourceClaim(false)}
                       disabled={cloudRunDeploying || Boolean(cloudRunDeployBlockReason)}
                     >
                       {cloudRunDeployButtonLabel}
