@@ -231,6 +231,32 @@ type CloudRunDeployment = {
   finished_at?: string;
 };
 
+type CloudRunRuntime = {
+  service_name: string;
+  url?: string;
+  ready?: boolean;
+  state?: string;
+  created_at?: string;
+  env_agent_name?: string;
+  foundry_url?: string;
+  deploy_mode?: string;
+  runtime_transport?: string;
+  scheduler_job?: string;
+  schedule?: string;
+  scheduler_state?: string;
+  last_attempt_time?: string;
+  next_schedule_time?: string;
+};
+
+type CloudRunRuntimeInventory = {
+  ok?: boolean;
+  project?: string;
+  region?: string;
+  services?: CloudRunRuntime[];
+  errors?: string[];
+  updated_at?: string;
+};
+
 type SettlementsMeta = {
   agent_name?: string;
   foundry_agent_name?: string;
@@ -1554,6 +1580,8 @@ export default function App() {
   const [cloudRunError, setCloudRunError] = useState("");
   const [cloudRunDeployments, setCloudRunDeployments] = useState<CloudRunDeployment[]>([]);
   const [cloudRunCurrentJob, setCloudRunCurrentJob] = useState<CloudRunDeployment | null>(null);
+  const [cloudRunRuntimes, setCloudRunRuntimes] = useState<CloudRunRuntimeInventory | null>(null);
+  const [cloudRunRuntimesLoading, setCloudRunRuntimesLoading] = useState(false);
   const [cloudRunDeploying, setCloudRunDeploying] = useState(false);
   const [cloudRunAuthSession, setCloudRunAuthSession] = useState<CloudRunAuthSession | null>(null);
   const [cloudRunAuthLoading, setCloudRunAuthLoading] = useState(false);
@@ -1590,6 +1618,7 @@ export default function App() {
     void fetchSettlements();
     void refreshCloudRunStatus();
     void refreshCloudRunDeployments();
+    void refreshCloudRunRuntimes();
   }, []);
 
   useEffect(() => {
@@ -1679,6 +1708,8 @@ export default function App() {
     () => cloudRunDeployments.find((job) => job.agent_name === selectedAgent) ?? null,
     [cloudRunDeployments, selectedAgent],
   );
+  const localAgentNameSet = useMemo(() => new Set(localAgents.map((agent) => agent.name)), [localAgents]);
+  const liveCloudRunServices = cloudRunRuntimes?.services ?? [];
   const displayedCloudRunDeployment =
     cloudRunCurrentJob?.agent_name === selectedAgent ? cloudRunCurrentJob : selectedCloudRunDeployment;
   const cloudRunDeploymentSucceeded = textValue(displayedCloudRunDeployment?.status) === "succeeded";
@@ -2287,6 +2318,7 @@ export default function App() {
         project: prev.project || textValue(defaults.project),
         region: prev.region || textValue(defaults.region, "us-central1"),
       }));
+      void refreshCloudRunRuntimes(textValue(defaults.project), textValue(defaults.region, "us-central1"));
     } catch (err) {
       setCloudRunError(String(err));
     } finally {
@@ -2308,6 +2340,32 @@ export default function App() {
     }
   }
 
+  async function refreshCloudRunRuntimes(projectOverride = "", regionOverride = "") {
+    setCloudRunRuntimesLoading(true);
+    try {
+      const params = new URLSearchParams();
+      const project = textValue(projectOverride, cloudRunForm.project);
+      const region = textValue(regionOverride, cloudRunForm.region);
+      if (project) {
+        params.set("project", project);
+      }
+      if (region) {
+        params.set("region", region);
+      }
+      const query = params.toString();
+      const response = await fetch(`${API_BASE}/api/cloud-run/runtimes${query ? `?${query}` : ""}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as CloudRunRuntimeInventory;
+      setCloudRunRuntimes(payload);
+    } catch (err) {
+      setCloudRunError(String(err));
+    } finally {
+      setCloudRunRuntimesLoading(false);
+    }
+  }
+
   async function refreshCloudRunDeployment(jobId: string) {
     if (!jobId) {
       return;
@@ -2323,6 +2381,9 @@ export default function App() {
         const without = prev.filter((item) => item.id !== payload.id);
         return [payload, ...without].slice(0, 20);
       });
+      if (["succeeded", "failed", "cancelled"].includes(textValue(payload.status))) {
+        void refreshCloudRunRuntimes();
+      }
     } catch (err) {
       setCloudRunError(String(err));
     }
@@ -4007,6 +4068,94 @@ export default function App() {
                       </strong>
                     </div>
                   </div>
+                </section>
+
+                <section className="panel span-two">
+                  <div className="section-heading">
+                    <div>
+                      <p className="eyebrow">Cloud Run inventory</p>
+                      <h3>Live pull workers</h3>
+                    </div>
+                    <button className="secondary" onClick={() => refreshCloudRunRuntimes()} disabled={cloudRunRuntimesLoading}>
+                      {cloudRunRuntimesLoading ? "Checking..." : "Refresh workers"}
+                    </button>
+                  </div>
+                  <div className="kv-list compact-kv">
+                    <div>
+                      <span>Project</span>
+                      <strong>{textValue(cloudRunRuntimes?.project, textValue(cloudRunStatus?.defaults?.project, "not set"))}</strong>
+                    </div>
+                    <div>
+                      <span>Region</span>
+                      <strong>{textValue(cloudRunRuntimes?.region, cloudRunForm.region)}</strong>
+                    </div>
+                    <div>
+                      <span>Workers</span>
+                      <strong>{liveCloudRunServices.length}</strong>
+                    </div>
+                  </div>
+                  {cloudRunRuntimes?.errors?.length ? (
+                    <div className="error">
+                      <strong>Cloud Run inventory</strong>
+                      <p>{cloudRunRuntimes.errors.join(" ")}</p>
+                    </div>
+                  ) : null}
+                  {liveCloudRunServices.length ? (
+                    <div className="runtime-grid cloud-run-history">
+                      {liveCloudRunServices.map((runtime) => {
+                        const runtimeAgentName = textValue(runtime.env_agent_name, runtime.service_name);
+                        const hasSource = localAgentNameSet.has(runtimeAgentName);
+                        const runtimeStatus = !hasSource
+                          ? "source missing"
+                          : runtime.ready
+                            ? "ready"
+                            : textValue(runtime.state, "unknown");
+                        return (
+                          <article key={runtime.service_name} className="runtime-card">
+                            <div className="card-header">
+                              <div>
+                                <h4>{runtime.service_name}</h4>
+                                <p className="muted">{runtimeAgentName}</p>
+                              </div>
+                              <span className={`status-pill ${!hasSource ? "warn" : statusTone(runtimeStatus)}`}>{runtimeStatus}</span>
+                            </div>
+                            <div className="kv-list compact-kv">
+                              <div>
+                                <span>Service URL</span>
+                                <strong>{displaySafeUrl(textValue(runtime.url), "pending")}</strong>
+                              </div>
+                              <div>
+                                <span>Scheduler</span>
+                                <strong>{textValue(runtime.scheduler_job, "not observed")}</strong>
+                              </div>
+                              <div>
+                                <span>Schedule</span>
+                                <strong>{textValue(runtime.schedule, "n/a")}</strong>
+                              </div>
+                              <div>
+                                <span>Last attempt</span>
+                                <strong>{textValue(runtime.last_attempt_time, "not observed")}</strong>
+                              </div>
+                              <div>
+                                <span>Foundry</span>
+                                <strong>{displaySafeUrl(textValue(runtime.foundry_url), "n/a")}</strong>
+                              </div>
+                            </div>
+                            {hasSource ? (
+                              <button className="secondary" onClick={() => setSelectedAgent(runtimeAgentName)}>
+                                Select source
+                              </button>
+                            ) : null}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="empty-state">
+                      <h4>No live Cloud Run workers</h4>
+                      <p className="muted">Deploy a source to create a Cloud Run pull worker.</p>
+                    </div>
+                  )}
                 </section>
 
                 <section className="panel span-two">

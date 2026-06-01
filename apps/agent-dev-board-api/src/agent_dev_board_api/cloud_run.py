@@ -70,6 +70,10 @@ def _json_command(args: list[str], *, timeout: float = 12.0) -> Any:
         return None
 
 
+def _resource_basename(value: Any) -> str:
+    return str(value or "").strip().rsplit("/", 1)[-1]
+
+
 def _read_gcloud_config() -> dict[str, str]:
     config_root = Path(os.getenv("CLOUDSDK_CONFIG", "") or Path.home() / ".config" / "gcloud")
     active_name = "default"
@@ -312,6 +316,177 @@ class CloudRunManager:
             if len(jobs) >= limit:
                 break
         return jobs
+
+    def list_live_runtimes(self, *, project: str = "", region: str = "") -> dict[str, Any]:
+        status = self.status()
+        status_gcloud = dict(status.get("gcloud") or {})
+        defaults = dict(status.get("defaults") or {})
+        clean_project = str(project or "").strip() or str(status_gcloud.get("project") or "").strip()
+        clean_region = (
+            str(region or "").strip()
+            or str(status_gcloud.get("region") or "").strip()
+            or str(defaults.get("region") or "").strip()
+            or "us-central1"
+        )
+        errors: list[str] = []
+        services: list[dict[str, Any]] = []
+        scheduler_jobs: list[dict[str, Any]] = []
+
+        if not clean_project:
+            return {
+                "ok": False,
+                "project": "",
+                "region": clean_region,
+                "services": services,
+                "scheduler_jobs": scheduler_jobs,
+                "errors": ["GCP project is required to list Cloud Run workers."],
+                "updated_at": _utcnow_iso(),
+            }
+
+        service_args = [
+            "gcloud",
+            "run",
+            "services",
+            "list",
+            "--platform",
+            "managed",
+            "--region",
+            clean_region,
+            "--project",
+            clean_project,
+            "--format=json",
+        ]
+        code, stdout, stderr = _run_command(service_args, timeout=20)
+        raw_services: Any = []
+        if code == 0 and stdout:
+            try:
+                raw_services = json.loads(stdout)
+            except Exception as exc:
+                errors.append(f"Failed to parse Cloud Run services: {exc}")
+        elif code != 0:
+            errors.append(stderr or stdout or "Failed to list Cloud Run services.")
+
+        scheduler_args = [
+            "gcloud",
+            "scheduler",
+            "jobs",
+            "list",
+            "--location",
+            clean_region,
+            "--project",
+            clean_project,
+            "--format=json",
+        ]
+        code, stdout, stderr = _run_command(scheduler_args, timeout=20)
+        raw_scheduler_jobs: Any = []
+        if code == 0 and stdout:
+            try:
+                raw_scheduler_jobs = json.loads(stdout)
+            except Exception as exc:
+                errors.append(f"Failed to parse Cloud Scheduler jobs: {exc}")
+        elif code != 0:
+            errors.append(stderr or stdout or "Failed to list Cloud Scheduler jobs.")
+
+        if isinstance(raw_scheduler_jobs, list):
+            for item in raw_scheduler_jobs:
+                if not isinstance(item, dict):
+                    continue
+                http_target = dict(item.get("httpTarget") or {})
+                scheduler_jobs.append(
+                    {
+                        "name": _resource_basename(item.get("name")),
+                        "schedule": str(item.get("schedule") or ""),
+                        "state": str(item.get("state") or ""),
+                        "uri": str(http_target.get("uri") or ""),
+                        "last_attempt_time": str(item.get("lastAttemptTime") or ""),
+                        "next_schedule_time": str(item.get("scheduleTime") or ""),
+                    }
+                )
+
+        scheduler_by_name = {str(job.get("name") or ""): job for job in scheduler_jobs}
+        if isinstance(raw_services, list):
+            for item in raw_services:
+                if not isinstance(item, dict):
+                    continue
+                metadata = dict(item.get("metadata") or {})
+                spec = dict(item.get("spec") or {})
+                status_payload = dict(item.get("status") or {})
+                template = dict(spec.get("template") or {})
+                template_spec = dict(template.get("spec") or {})
+                containers = template_spec.get("containers") or []
+                env: dict[str, str] = {}
+                if isinstance(containers, list):
+                    for container in containers:
+                        if not isinstance(container, dict):
+                            continue
+                        for env_item in container.get("env") or []:
+                            if not isinstance(env_item, dict):
+                                continue
+                            key = str(env_item.get("name") or "")
+                            if key in {
+                                "AGENT_DEPLOY_MODE",
+                                "ME_AGENT_NAME",
+                                "FOUNDRY_BASE_URL",
+                                "FOUNDRY_RUNTIME_TRANSPORT",
+                            }:
+                                env[key] = str(env_item.get("value") or "")
+
+                service_name = str(metadata.get("name") or "").strip()
+                service_url = str(status_payload.get("url") or (status_payload.get("address") or {}).get("url") or "")
+                conditions = status_payload.get("conditions") or []
+                ready_condition = next(
+                    (
+                        condition
+                        for condition in conditions
+                        if isinstance(condition, dict) and str(condition.get("type") or "") == "Ready"
+                    ),
+                    {},
+                )
+                ready = str(ready_condition.get("status") or "").lower() == "true"
+                scheduler = scheduler_by_name.get(f"poll-{service_name}") or next(
+                    (
+                        job
+                        for job in scheduler_jobs
+                        if service_url and str(job.get("uri") or "").startswith(service_url.rstrip("/") + "/")
+                    ),
+                    {},
+                )
+                is_foundry_worker = (
+                    env.get("AGENT_DEPLOY_MODE") == "cloud_run"
+                    or env.get("FOUNDRY_RUNTIME_TRANSPORT") == "pull"
+                    or bool(scheduler)
+                )
+                if not is_foundry_worker:
+                    continue
+                services.append(
+                    {
+                        "service_name": service_name,
+                        "url": service_url,
+                        "ready": ready,
+                        "state": "ready" if ready else str(ready_condition.get("reason") or "not ready"),
+                        "created_at": str(metadata.get("creationTimestamp") or ""),
+                        "env_agent_name": env.get("ME_AGENT_NAME", ""),
+                        "foundry_url": env.get("FOUNDRY_BASE_URL", ""),
+                        "deploy_mode": env.get("AGENT_DEPLOY_MODE", ""),
+                        "runtime_transport": env.get("FOUNDRY_RUNTIME_TRANSPORT", ""),
+                        "scheduler_job": str(scheduler.get("name") or ""),
+                        "schedule": str(scheduler.get("schedule") or ""),
+                        "scheduler_state": str(scheduler.get("state") or ""),
+                        "last_attempt_time": str(scheduler.get("last_attempt_time") or ""),
+                        "next_schedule_time": str(scheduler.get("next_schedule_time") or ""),
+                    }
+                )
+
+        services.sort(key=lambda item: str(item.get("service_name") or ""))
+        return {
+            "ok": not errors,
+            "project": clean_project,
+            "region": clean_region,
+            "services": services,
+            "scheduler_jobs": scheduler_jobs,
+            "errors": errors,
+            "updated_at": _utcnow_iso(),
+        }
 
     def get_deployment(self, job_id: str) -> dict[str, Any]:
         normalized = str(job_id or "").strip()

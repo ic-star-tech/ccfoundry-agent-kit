@@ -1336,6 +1336,11 @@ async def list_cloud_run_deployments(limit: int = 20) -> list[dict[str, Any]]:
     return CLOUD_RUN_MANAGER.list_deployments(limit=limit)
 
 
+@app.get("/api/cloud-run/runtimes")
+async def list_cloud_run_runtimes(project: str = "", region: str = "") -> dict[str, Any]:
+    return CLOUD_RUN_MANAGER.list_live_runtimes(project=project, region=region)
+
+
 @app.get("/api/cloud-run/deployments/{job_id}")
 async def get_cloud_run_deployment(job_id: str) -> dict[str, Any]:
     try:

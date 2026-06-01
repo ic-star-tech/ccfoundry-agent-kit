@@ -114,6 +114,12 @@ for the selected source agent's registered Foundry identity, so bounty earnings
 from a Cloud Run worker are shown in the same Earnings view as local test
 settlements.
 
+The Cloud Run tab lists live workers from the active Google Cloud project and
+region, not only deployment jobs that still have a local source entry. This
+makes stale workers visible after a source cleanup or demo reset; a worker with
+no matching source is shown as source-missing until it is deleted from Cloud Run
+and Cloud Scheduler.
+
 The region field offers quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), but you can type another valid Cloud Run region ID. The poll schedule is a Cloud Scheduler cron expression; the default `* * * * *` triggers `POST /foundry/poll` every minute.
 
 Deployment can take a few minutes because the board runs Docker build/push, creates a Cloud Run revision, updates the public URL env var, grants Scheduler invoker access, and creates or updates the Scheduler job. The UI polls the deployment job and shows elapsed time plus recent log lines while it runs.
