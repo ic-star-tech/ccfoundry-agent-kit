@@ -19,6 +19,14 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _env_truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_gce_metadata_account(account: str) -> bool:
+    return str(account or "").strip().lower().endswith("-compute@developer.gserviceaccount.com")
+
+
 def _run_command(args: list[str], *, timeout: float = 12.0) -> tuple[int, str, str]:
     try:
         completed = subprocess.run(
@@ -140,6 +148,7 @@ class CloudRunManager:
         project = ""
         region = ""
         errors: list[str] = []
+        disable_metadata_auth = _env_truthy("CCFOUNDRY_DEV_BOARD_DISABLE_GCE_METADATA_AUTH")
 
         if gcloud_path:
             _, gcloud_version, version_err = _run_command(["gcloud", "--version"], timeout=12)
@@ -149,15 +158,25 @@ class CloudRunManager:
             active_account = file_config.get("account", "")
             project = file_config.get("project", "")
             region = file_config.get("region", "")
+            if disable_metadata_auth and _is_gce_metadata_account(active_account):
+                active_account = ""
             if active_account:
                 accounts = [{"account": active_account, "status": "ACTIVE"}]
             else:
                 raw_accounts = _json_command(["gcloud", "auth", "list", "--format=json"], timeout=5)
                 if isinstance(raw_accounts, list):
-                    accounts = [item for item in raw_accounts if isinstance(item, dict)]
+                    accounts = [
+                        item
+                        for item in raw_accounts
+                        if isinstance(item, dict)
+                        and not (
+                            disable_metadata_auth
+                            and _is_gce_metadata_account(str(item.get("account") or ""))
+                        )
+                    ]
                     active = next((item for item in accounts if item.get("status") == "ACTIVE"), {})
                     active_account = str(active.get("account") or "").strip()
-            if not active_account:
+            if not active_account and not disable_metadata_auth:
                 metadata_account = _metadata_service_account_email()
                 if metadata_account:
                     active_account = metadata_account
