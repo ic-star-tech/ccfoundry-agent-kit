@@ -165,18 +165,19 @@ Build a client from the live bootstrap object:
 
 ```python
 sandbox = bootstrap.sandbox_client()
-await sandbox.start()
+await sandbox.start(invocation_id=42, requirement_id="req-sync-fifo")
 await sandbox.workspace_write("jobs/request.txt", "convert this PDF summary")
 state = await sandbox.terminal_exec("ls -la && cat jobs/request.txt")
 print(state["state"]["capture_text"])
-await sandbox.stop()
+stop_result = await sandbox.stop(invocation_id=42)
+print(stop_result.get("runtime_cost"))
 ```
 
 Available helper methods:
 
 - `status()`
-- `start()`
-- `stop()`
+- `start(invocation_id=None, requirement_id="", billing_context=None)`
+- `stop(invocation_id=None)`
 - `terminal_state(capture_lines=80)`
 - `terminal_exec(command, wait_ms=250, capture_lines=80, clear_line=False, enter=True)`
 - `workspace_tree(depth=3)`
@@ -190,6 +191,8 @@ The client automatically uses:
 - the approved `AGENT_SECRET`
 - `allocated_resources.sandbox_workspace.control_plane`
 
+For paid bounty work, pass the Foundry-provided `billing_context.invocation_id` to `start()` and `stop()`. Foundry uses that ID to attribute sandbox runtime cost to the task settlement.
+
 ## Foundry-provided model policy
 
 If Foundry includes a model policy in approval env vars, agents can read:
@@ -198,6 +201,22 @@ If Foundry includes a model policy in approval env vars, agents can read:
 - `LLM_ALLOWED_MODELS_JSON`
 
 The bundled `me_agent` now honors those values ahead of its local config defaults.
+
+For paid bounty work, include the same billing context in OpenAI-compatible requests that use Foundry-provided LLM resources:
+
+```python
+from ccfoundry_agent_kit import foundry_llm_metadata
+
+billing = payload.get("billing_context", {})
+metadata = foundry_llm_metadata(billing, agent_name="verilog-module-writer")
+response = await client.chat.completions.create(
+    model=model,
+    messages=[{"role": "user", "content": prompt}],
+    extra_body={"metadata": metadata},
+)
+```
+
+Foundry's LiteLLM callback uses this metadata to write model usage to the same `invocation_id` ledger as sandbox runtime.
 
 ## Security boundary
 

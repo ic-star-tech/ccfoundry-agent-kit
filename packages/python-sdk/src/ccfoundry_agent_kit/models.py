@@ -114,6 +114,33 @@ class ChatResponse(BaseModel):
         return payload
 
 
+class BillingContext(BaseModel):
+    """Foundry billing context injected into paid task payloads."""
+
+    model_config = ConfigDict(extra="allow")
+
+    invocation_id: int = 0
+    requirement_id: str = ""
+    job_name: str = ""
+
+
+class SettlementBreakdown(BaseModel):
+    """Cost breakdown returned by Foundry after deliverable settlement."""
+
+    model_config = ConfigDict(extra="allow")
+
+    gross_reward_usd: float = 0.0
+    resource_cost_usd: float = 0.0
+    net_payout_usd: float = 0.0
+    unrecovered_resource_cost_usd: float = 0.0
+    model_cost_usd: float = 0.0
+    sandbox_cost_usd: float = 0.0
+    feature_cost_usd: float = 0.0
+    billing_mode: str = "deduct_from_reward"
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    resource_breakdown: dict[str, Any] = Field(default_factory=dict)
+
+
 class HealthResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -140,8 +167,8 @@ class MandateItem(BaseModel):
 
     Examples::
 
-        MandateItem(label="llm_tokens", amount=0.08, currency="USD")
-        MandateItem(label="sandbox_compute", amount=0.05, currency="USD")
+        MandateItem(label="llm_cost", amount=-0.08, currency="USD")
+        MandateItem(label="sandbox_cost", amount=-0.05, currency="USD")
         MandateItem(label="task_reward", amount=10.0, currency="USD")
     """
 

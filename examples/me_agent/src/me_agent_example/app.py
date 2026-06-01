@@ -20,6 +20,7 @@ from ccfoundry_agent_kit import (
     FoundrySandboxClientError,
     compute_skills_hash,
     create_agent_app,
+    foundry_llm_metadata,
     scan_loaded_skills,
     scan_slash_commands,
 )
@@ -905,7 +906,7 @@ app = create_agent_app(
 # ---------------------------------------------------------------------------
 import logging
 import httpx
-from pydantic import BaseModel as _BountyBase
+from pydantic import BaseModel as _BountyBase, Field as _BountyField
 
 _bounty_log = logging.getLogger("bounty")
 
@@ -923,6 +924,11 @@ class _BountyExecReq(_BountyBase):
     foundry_url: str = "https://foundry.cochiper.com"
     job_id: str = ""
     job_name: str = ""
+    job_description: str = ""
+    payment_criteria: str = ""
+    tags: list[str] = _BountyField(default_factory=list)
+    job: dict = _BountyField(default_factory=dict)
+    billing_context: dict = _BountyField(default_factory=dict)
     dry_run: bool = False
 
 
@@ -988,6 +994,173 @@ def _evaluate_job(job: dict, skill_tags: dict[str, list[str]]) -> dict:
         "budget": job.get("budget"),
         "payment_criteria": job.get("payment_criteria", ""),
     }
+
+
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _search_tokens(value: str) -> set[str]:
+    raw = str(value or "").lower()
+    pieces = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*|\d+", raw)
+    tokens: set[str] = set()
+    for piece in pieces:
+        normalized = piece.strip("_").lower()
+        if not normalized:
+            continue
+        tokens.add(normalized)
+        tokens.update(part for part in normalized.split("_") if part)
+    return tokens
+
+
+def _verilog_module_names(content: str) -> set[str]:
+    return {
+        match.group(1)
+        for match in re.finditer(r"(?m)^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\b", content or "")
+    }
+
+
+def _discover_reference_modules() -> list[dict[str, object]]:
+    modules: dict[str, dict[str, object]] = {}
+    if not SKILLS_DIR.exists():
+        return []
+    for skill_dir in SKILLS_DIR.iterdir():
+        ref_root = skill_dir / "references"
+        if not skill_dir.is_dir() or not ref_root.exists():
+            continue
+        for module_dir in ref_root.iterdir():
+            if not module_dir.is_dir():
+                continue
+            module_key = module_dir.name
+            item = modules.setdefault(
+                module_key,
+                {"module": module_key, "skills": set(), "tokens": set(), "files": []},
+            )
+            item["skills"].add(skill_dir.name)  # type: ignore[index,union-attr]
+            item["tokens"].update(_search_tokens(module_key))  # type: ignore[index,union-attr]
+            for path in module_dir.iterdir():
+                if path.suffix != ".v" or not path.is_file():
+                    continue
+                item["files"].append(path.name)  # type: ignore[index,union-attr]
+                item["tokens"].update(_search_tokens(path.stem))  # type: ignore[index,union-attr]
+                try:
+                    item["tokens"].update(_search_tokens(" ".join(_verilog_module_names(path.read_text(encoding="utf-8")))))  # type: ignore[index,union-attr]
+                except Exception:
+                    pass
+    result: list[dict[str, object]] = []
+    for item in modules.values():
+        result.append({
+            "module": str(item["module"]),
+            "skills": sorted(item["skills"]),  # type: ignore[arg-type]
+            "tokens": sorted(item["tokens"]),  # type: ignore[arg-type]
+            "files": sorted(item["files"]),  # type: ignore[arg-type]
+        })
+    return sorted(result, key=lambda item: str(item["module"]))
+
+
+def _score_reference_module(module: dict[str, object], job_text: str, evaluation: dict) -> int:
+    job_tokens = _search_tokens(job_text)
+    reason_tokens = _search_tokens(" ".join(str(item) for item in evaluation.get("match_reasons", [])))
+    module_tokens = set(str(token) for token in module.get("tokens", []) if str(token).strip())
+    module_name = str(module.get("module") or "")
+    score = 0
+    score += len(job_tokens & module_tokens) * 10
+    score += len(reason_tokens & module_tokens) * 3
+    if module_name.lower() in job_text.lower():
+        score += 25
+    return score
+
+
+def _infer_bounty_module(job_text: str, evaluation: dict) -> str:
+    scored = [
+        (_score_reference_module(module, job_text, evaluation), str(module.get("module") or ""))
+        for module in _discover_reference_modules()
+    ]
+    scored = [(score, module) for score, module in scored if score > 0 and module]
+    if not scored:
+        return ""
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return scored[0][1]
+
+
+def _reference_skills_for_module(module_name: str) -> list[str]:
+    for item in _discover_reference_modules():
+        if str(item.get("module") or "") == module_name:
+            return [str(skill) for skill in item.get("skills", []) if str(skill).strip()]
+    return []
+
+
+def _extract_job_number(text: str, patterns: list[str]) -> int | None:
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            value = int(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def _requested_verilog_parameters(job_text: str) -> dict[str, int]:
+    requested: dict[str, int] = {}
+    width = _extract_job_number(
+        job_text,
+        [
+            r"\b(\d+)\s*[- ]?\s*bit\b",
+            r"\bwidth\s*[:=]?\s*(\d+)\b",
+            r"\bdata[_\s-]*width\s*[:=]?\s*(\d+)\b",
+        ],
+    )
+    depth = _extract_job_number(
+        job_text,
+        [
+            r"\bdepth\s*[:=]?\s*(\d+)\b",
+            r"\b(\d+)\s*[- ]?\s*deep\b",
+        ],
+    )
+    if width is not None:
+        requested["width"] = width
+    if depth is not None:
+        requested["depth"] = depth
+        requested["addr_width"] = max(1, (depth - 1).bit_length())
+    return requested
+
+
+def _parameter_kind(parameter_name: str) -> str:
+    normalized = parameter_name.lower()
+    if "addr" in normalized and "width" in normalized:
+        return "addr_width"
+    if "depth" in normalized or normalized in {"depth", "fifo_depth", "entries"}:
+        return "depth"
+    if "width" in normalized or normalized in {"width", "data_width"}:
+        return "width"
+    return ""
+
+
+def _apply_verilog_parameter_overrides(files: dict[str, str], requested: dict[str, int]) -> dict[str, str]:
+    if not requested:
+        return files
+    updated: dict[str, str] = {}
+    pattern = re.compile(
+        r"(?P<prefix>\bparameter\s+(?:integer\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\s*=\s*)(?P<value>\d+)",
+        re.IGNORECASE,
+    )
+    for fname, content in files.items():
+        def replace(match: re.Match[str]) -> str:
+            kind = _parameter_kind(match.group("name"))
+            if kind not in requested:
+                return match.group(0)
+            return f"{match.group('prefix')}{requested[kind]}"
+
+        updated[fname] = pattern.sub(replace, content)
+    return updated
 
 
 @app.post("/bounty/scan")
@@ -1103,38 +1276,61 @@ async def bounty_execute(req: _BountyExecReq) -> dict:
     foundry_url = req.foundry_url
     job_id = req.job_id
     job_name = req.job_name
+    job = req.job if isinstance(req.job, dict) else {}
+    job_description = str(req.job_description or job.get("description") or "").strip()
+    payment_criteria = str(req.payment_criteria or job.get("payment_criteria") or "").strip()
+    job_tags = _string_list(req.tags) or _string_list(job.get("tags"))
+    billing_context = dict(req.billing_context or {})
+    invocation_id = int(billing_context.get("invocation_id") or 0)
     dry_run = req.dry_run
     _bounty_log.info("Executing bounty job_id=%s job_name=%s", job_id, job_name)
 
     # Step 1: Evaluate job and find matching skills
     skill_tags = _skill_tag_map()
-    job_info = {"id": job_id, "name": job_name, "tags": ["verilog", "RRA"]}
+    job_info = {
+        "id": job_id,
+        "name": job_name,
+        "description": job_description,
+        "payment_criteria": payment_criteria,
+        "tags": job_tags,
+    }
     evaluation = _evaluate_job(job_info, skill_tags)
     matched_skills = evaluation["matched_skills"]
+    job_text = " ".join([job_name, job_description, payment_criteria, " ".join(job_tags)])
+    module_name = _infer_bounty_module(job_text, evaluation)
 
+    if module_name:
+        for skill in _reference_skills_for_module(module_name):
+            if skill not in matched_skills:
+                matched_skills.append(skill)
     if not matched_skills:
         return {"ok": False, "step": "evaluate", "error": "No matching skills found", "evaluation": evaluation}
 
     # Step 2: Load reference code from matched skills
     reference_files: dict[str, str] = {}
-    module_name = ""
-
-    # Try to find the specific module from job name/tags
-    for candidate in ("rra", "fifo", "sync_fifo", "counter", "edge_detect", "priority_enc", "pulse_sync"):
-        if candidate in job_name.lower() or candidate in str(evaluation.get("match_reasons", [])).lower():
-            module_name = candidate
-            break
 
     if not module_name:
-        module_name = "rra"  # default for this demo
+        return {
+            "ok": False,
+            "step": "evaluate",
+            "error": "No matching reference module found",
+            "evaluation": evaluation,
+            "reference_modules": _discover_reference_modules(),
+        }
 
     for skill in matched_skills:
         refs = _find_skill_reference(skill, module_name)
-        reference_files.update(refs)
+        if refs:
+            reference_files.update(refs)
 
     if not reference_files:
-        # Also try from ip_reference directly
-        reference_files = _find_skill_reference("ip_reference", module_name)
+        for skill in _reference_skills_for_module(module_name):
+            refs = _find_skill_reference(skill, module_name)
+            if refs:
+                reference_files.update(refs)
+
+    requested_parameters = _requested_verilog_parameters(job_text)
+    reference_files = _apply_verilog_parameter_overrides(reference_files, requested_parameters)
 
     # Step 3: Read coding style guidelines
     coding_style = ""
@@ -1150,6 +1346,7 @@ async def bounty_execute(req: _BountyExecReq) -> dict:
         "step": "evaluate",
         "matched_skills": matched_skills,
         "module_name": module_name,
+        "requested_parameters": requested_parameters,
         "reference_files": list(reference_files.keys()),
     })
 
@@ -1187,18 +1384,29 @@ async def bounty_execute(req: _BountyExecReq) -> dict:
                 f"2. Testbench must print ALL_TESTS_PASSED on success\n"
                 f"3. Must compile with: iverilog -o sim {module_name}.v {module_name}_tb.v\n"
                 f"4. Output both files clearly separated with filenames\n"
+                f"\nJob request:\n{job_name}\n{job_description}\n{payment_criteria}\n"
             )
 
             client = AsyncOpenAI(
                 api_key=runtime["api_key"],
                 base_url=runtime.get("base_url") or None,
             )
-            response = await client.chat.completions.create(
-                model=runtime.get("model", "ccfoundry-local"),
-                temperature=0.2,
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}],
+            completion_kwargs: dict[str, Any] = {
+                "model": runtime.get("model", "ccfoundry-local"),
+                "temperature": 0.2,
+                "max_tokens": 2000,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            if invocation_id:
+                completion_kwargs["user"] = f"foundry-invocation-{invocation_id}"
+            llm_metadata = foundry_llm_metadata(
+                billing_context,
+                agent_name=MANIFEST.name,
+                extra={"purpose": "bounty_generate"},
             )
+            if llm_metadata:
+                completion_kwargs["extra_body"] = {"metadata": llm_metadata}
+            response = await client.chat.completions.create(**completion_kwargs)
             generated_code = (response.choices[0].message.content or "").strip()
             llm_used = True
             steps_log.append({"step": "llm_generate", "model": runtime.get("model"), "chars": len(generated_code)})
@@ -1209,12 +1417,17 @@ async def bounty_execute(req: _BountyExecReq) -> dict:
     sandbox_result: dict[str, Any] = {"available": False}
 
     if FOUNDRY_BOOTSTRAP:
+        sandbox_client = None
         try:
             sandbox_client = FOUNDRY_BOOTSTRAP.sandbox_client(timeout=30.0)
 
             # Ensure sandbox session is active before writing
             try:
-                start_result = await sandbox_client.start()
+                start_result = await sandbox_client.start(
+                    invocation_id=invocation_id or None,
+                    requirement_id=job_id,
+                    billing_context=billing_context,
+                )
                 sandbox_pool = start_result.get("sandbox_pool", "unknown")
                 steps_log.append({"step": "sandbox_start", "pool": sandbox_pool, "reused": start_result.get("reused", False)})
             except Exception as start_exc:
@@ -1289,6 +1502,19 @@ async def bounty_execute(req: _BountyExecReq) -> dict:
                 friendly = err_msg[:200]
             steps_log.append({"step": "sandbox", "error": friendly, "sandbox_skipped": True})
             sandbox_result = {"available": False, "error": friendly}
+        finally:
+            if invocation_id and sandbox_client is not None:
+                try:
+                    stop_result = await sandbox_client.stop(invocation_id=invocation_id)
+                    sandbox_result["runtime_cost"] = stop_result.get("runtime_cost", 0.0)
+                    sandbox_result["runtime_minutes"] = stop_result.get("runtime_minutes", 0.0)
+                    steps_log.append({
+                        "step": "sandbox_stop",
+                        "runtime_cost": stop_result.get("runtime_cost", 0.0),
+                        "runtime_minutes": stop_result.get("runtime_minutes", 0.0),
+                    })
+                except Exception as stop_exc:
+                    steps_log.append({"step": "sandbox_stop", "error": str(stop_exc)[:200]})
 
     if not FOUNDRY_BOOTSTRAP:
         steps_log.append({"step": "sandbox", "error": "No Foundry bootstrap configured", "sandbox_skipped": True})
@@ -1329,6 +1555,7 @@ async def bounty_execute(req: _BountyExecReq) -> dict:
         submission_payload = {
             "requirement_id": job_id,
             "agent_name": MANIFEST.name,
+            "invocation_id": invocation_id,
             "module_name": module_name,
             "files_delivered": list(reference_files.keys()),
             "code_content": reference_files,  # full code for verification
@@ -1336,24 +1563,44 @@ async def bounty_execute(req: _BountyExecReq) -> dict:
             "tests_passed": bool(sandbox_result.get("tests_passed")),
             "sandbox_verified": bool(sandbox_result.get("available") and sandbox_result.get("tests_passed")),
             "llm_used": llm_used,
+            "metadata": {
+                "requested_parameters": requested_parameters,
+                "billing_context": billing_context,
+            },
         }
+        submit_headers: dict[str, str] = {}
+        if FOUNDRY_BOOTSTRAP:
+            agent_secret = str(FOUNDRY_BOOTSTRAP.state.env_vars.get("AGENT_SECRET") or "").strip()
+            if agent_secret:
+                submit_headers["Authorization"] = f"Bearer {agent_secret}"
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.post(
                 f"{normalized}/api/public/deliverable/submit",
                 json=submission_payload,
+                headers=submit_headers,
             )
             verification_result = resp.json()
 
         if verification_result.get("ok") and verification_result.get("status") == "accepted":
             deliverable["status"] = "accepted"
+            settlement_breakdown = verification_result.get("settlement") if isinstance(verification_result.get("settlement"), dict) else {}
             deliverable["settlement"] = {
                 "amount": verification_result.get("settlement_amount"),
                 "currency": verification_result.get("settlement_currency"),
                 "settlement_id": verification_result.get("settlement_id"),
+                "gross_reward_usd": settlement_breakdown.get("gross_reward_usd"),
+                "resource_cost_usd": settlement_breakdown.get("resource_cost_usd"),
+                "net_payout_usd": settlement_breakdown.get("net_payout_usd"),
             }
             steps_log.append({
                 "step": "verification",
-                "output": f"✅ Accepted! Settlement: ${verification_result.get('settlement_amount', 0):.2f} ({verification_result.get('settlement_id', '')})",
+                "output": (
+                    "✅ Accepted! "
+                    f"Gross ${settlement_breakdown.get('gross_reward_usd', 0):.2f}, "
+                    f"resources ${settlement_breakdown.get('resource_cost_usd', 0):.2f}, "
+                    f"net ${verification_result.get('settlement_amount', 0):.2f} "
+                    f"({verification_result.get('settlement_id', '')})"
+                ),
                 "tests_passed": True,
             })
             stripe_info = verification_result.get("stripe", {})
@@ -1383,3 +1630,30 @@ async def bounty_execute(req: _BountyExecReq) -> dict:
         "deliverable": deliverable,
         "steps": steps_log,
     }
+
+
+async def _bounty_runtime_handler(payload: dict, _agent_space: object) -> dict:
+    job = payload.get("job") if isinstance(payload.get("job"), dict) else {}
+    job_id = str(payload.get("job_id") or job.get("id") or "").strip()
+    job_name = str(payload.get("job_name") or job.get("name") or job_id).strip()
+    foundry_url = str(payload.get("foundry_url") or "").strip()
+    if not foundry_url and FOUNDRY_BOOTSTRAP:
+        foundry_url = str(FOUNDRY_BOOTSTRAP.config.foundry_base_url or "").strip()
+    if not foundry_url:
+        foundry_url = "https://foundry.cochiper.com"
+    return await bounty_execute(
+        _BountyExecReq(
+            foundry_url=foundry_url,
+            job_id=job_id,
+            job_name=job_name,
+            job_description=str(job.get("description") or "").strip(),
+            payment_criteria=str(job.get("payment_criteria") or "").strip(),
+            tags=_string_list(job.get("tags")),
+            job=job,
+            billing_context=dict(payload.get("billing_context") or {}),
+            dry_run=bool(payload.get("dry_run", False)),
+        )
+    )
+
+
+app.state.foundry_bounty_handler = _bounty_runtime_handler

@@ -76,11 +76,31 @@ Use `FoundrySandboxClient` to operate that workspace:
 
 ```python
 sandbox = bootstrap.sandbox_client()
-await sandbox.start()
+billing = payload.get("billing_context", {})
+await sandbox.start(
+    invocation_id=billing.get("invocation_id"),
+    requirement_id=billing.get("requirement_id", ""),
+    billing_context=billing,
+)
 await sandbox.workspace_write("jobs/hello.txt", "hello from ext brain")
 result = await sandbox.terminal_exec("cat jobs/hello.txt")
 print(result["state"]["capture_text"])
-await sandbox.stop()
+await sandbox.stop(invocation_id=billing.get("invocation_id"))
+```
+
+For paid bounty work, pass Foundry's `billing_context.invocation_id` so sandbox runtime cost can be deducted from the task reward during settlement.
+
+When using Foundry-provided LLM resources for the same bounty, pass billing metadata into the OpenAI-compatible request:
+
+```python
+from ccfoundry_agent_kit import foundry_llm_metadata
+
+metadata = foundry_llm_metadata(billing, agent_name="verilog-module-writer")
+response = await client.chat.completions.create(
+    model=model,
+    messages=[{"role": "user", "content": prompt}],
+    extra_body={"metadata": metadata},
+)
 ```
 
 See:

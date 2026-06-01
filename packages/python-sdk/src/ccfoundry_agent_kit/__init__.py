@@ -9,6 +9,7 @@ from .bootstrap import (
     FoundryInvitePayload,
 )
 from .client import AgentClient
+from .llm_metadata import foundry_llm_metadata
 from .mandate_signing import (
     create_cart_mandate,
     create_intent_mandate,
@@ -18,6 +19,7 @@ from .mandate_signing import (
 )
 from .models import (
     AgentManifest,
+    BillingContext,
     ChatRequest,
     ChatResponse,
     ContextMode,
@@ -25,6 +27,7 @@ from .models import (
     FoundryManifest,
     HealthResponse,
     MandateItem,
+    SettlementBreakdown,
     SettlementNotification,
     SettlementRecord,
     SlashCommand,
@@ -38,6 +41,7 @@ __all__ = [
     "AgentClient",
     "AgentManifest",
     "AgentSpace",
+    "BillingContext",
     "ChatRequest",
     "ChatResponse",
     "ContextMode",
@@ -54,6 +58,7 @@ __all__ = [
     "FoundrySandboxClientError",
     "HealthResponse",
     "MandateItem",
+    "SettlementBreakdown",
     "SettlementNotification",
     "SettlementRecord",
     "SlashCommand",
@@ -63,6 +68,7 @@ __all__ = [
     "create_cart_mandate",
     "create_intent_mandate",
     "create_settlement_mandate",
+    "foundry_llm_metadata",
     "scan_loaded_skills",
     "scan_slash_commands",
     "sign_mandate",

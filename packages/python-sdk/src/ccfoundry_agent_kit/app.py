@@ -22,6 +22,7 @@ from .pull_runtime import FoundryPullRuntime
 from .workspace_api import build_workspace_router
 
 ChatHandler = Callable[[ChatRequest, AgentSpace], ChatResponse | Awaitable[ChatResponse]]
+BountyHandler = Callable[[dict[str, Any], AgentSpace], dict[str, Any] | Awaitable[dict[str, Any]]]
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +36,7 @@ def create_agent_app(
     chat_handler: ChatHandler,
     agent_space_dir: str | Path,
     foundry_bootstrap: FoundryBootstrap | None = None,
+    bounty_handler: BountyHandler | None = None,
 ) -> FastAPI:
     app = FastAPI(title=manifest.label, version=manifest.version)
     agent_space = AgentSpace(Path(agent_space_dir))
@@ -64,6 +66,15 @@ def create_agent_app(
         if result.notes_update.strip():
             agent_space.append_note(result.notes_update, source=request.mode.value)
         return result
+
+    async def _run_bounty(payload: dict[str, Any]) -> dict[str, Any]:
+        handler = bounty_handler or getattr(app.state, "foundry_bounty_handler", None)
+        if not handler:
+            raise RuntimeError("No bounty handler configured for this agent")
+        result = handler(payload, agent_space)
+        if inspect.isawaitable(result):
+            result = await result
+        return dict(result or {})
 
     def _coerce_mode(raw_value: Any, *, inline_hint: bool = False) -> ContextMode:
         normalized = str(raw_value or "").strip().lower()
@@ -111,6 +122,7 @@ def create_agent_app(
             bootstrap=foundry_bootstrap,
             normalize_payload=_normalize_foundry_chat_payload,
             run_chat=_run_chat,
+            run_bounty=_run_bounty,
         )
         if foundry_bootstrap
         else None

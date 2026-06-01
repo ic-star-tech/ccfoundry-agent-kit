@@ -27,9 +27,26 @@ For developer flows, there is a parallel identity step before or during discover
 
 - Dev Board opens a Foundry-hosted GitHub login and exchanges that developer session for a short-lived `bootstrap ticket`
 - Foundry returns a `discovery_claim_token`
-- the running agent re-discovers with `developer_access` metadata and `bootstrap_delivery = poll|hybrid`
+- the selected source stores the claim; a running local debug runtime can consume it immediately, while a Cloud Run worker receives it from deployment env and re-discovers on first poll with `developer_access` metadata and `bootstrap_delivery = poll|hybrid`
 
 This matters because discovery is not admission, and admission is not activation.
+
+## Agent Source vs Runtime Target
+
+Dev Board uses one agent source to produce one or more runtime targets over the
+agent's lifetime. These are intentionally different concepts:
+
+- **Agent source** is the local durable instance: skills, `agent_space`,
+  bootstrap state, and deployment inputs.
+- **Local runtime** is a process on the Dev Board host. It is intended for
+  playground debugging and quick local smoke tests.
+- **Cloud Run runtime** is a deployed pull worker built from the same source. It
+  is intended for unattended Foundry polling, bounty execution, and settlement.
+
+The local playground is only a debug surface for the local runtime. Cloud Run
+does not need a playground or a running local runtime to bootstrap; Dev Board
+validates Cloud Run through deployment status, Scheduler, `/foundry/poll`,
+invocation results, and Foundry settlement records.
 
 ## What the agent sends
 
@@ -77,7 +94,8 @@ Agent starts
   -> SDK publishes /.well-known/agent-card.json
   -> SDK sends POST /api/registry/discover
   -> optional: Dev Board requests a bootstrap ticket
-  -> agent installs discovery_claim_token and re-discovers
+  -> source or running agent installs discovery_claim_token
+  -> chosen runtime re-discovers
   -> Foundry host evaluates the discovery according to its own policy
   -> Foundry host issues invite if accepted
   -> Foundry either pushes /foundry/bootstrap/invite or exposes pending_invite via poll
@@ -192,13 +210,14 @@ The SDK exposes `FoundrySandboxClient` for this:
 
 ```python
 sandbox = bootstrap.sandbox_client()
-await sandbox.start()
+billing = {"invocation_id": 42, "requirement_id": "req-demo"}
+await sandbox.start(invocation_id=billing["invocation_id"], billing_context=billing)
 await sandbox.workspace_write("jobs/input.txt", "hello")
 text = await sandbox.workspace_read_text("jobs/input.txt")
 result = await sandbox.terminal_exec("cat jobs/input.txt")
 print(text)
 print(result["state"]["capture_text"])
-await sandbox.stop()
+await sandbox.stop(invocation_id=billing["invocation_id"])
 ```
 
 This keeps task files inside the Foundry sandbox while allowing the external agent to coordinate the work.

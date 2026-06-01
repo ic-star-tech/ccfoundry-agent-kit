@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 
 NormalizePayload = Callable[[dict[str, Any]], ChatRequest]
 RunChat = Callable[[ChatRequest], Awaitable[ChatResponse]]
+RunBounty = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 class FoundryPullRuntime:
@@ -25,11 +26,13 @@ class FoundryPullRuntime:
         bootstrap: FoundryBootstrap,
         normalize_payload: NormalizePayload,
         run_chat: RunChat,
+        run_bounty: RunBounty | None = None,
         poll_interval_seconds: float = 1.0,
     ) -> None:
         self.bootstrap = bootstrap
         self.normalize_payload = normalize_payload
         self.run_chat = run_chat
+        self.run_bounty = run_bounty
         self.poll_interval_seconds = max(float(poll_interval_seconds or 1.0), 0.25)
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -163,12 +166,100 @@ class FoundryPullRuntime:
             },
         )
 
+    async def _process_bounty_execute(self, invocation: dict[str, Any]) -> None:
+        invocation_id = int(invocation.get("id") or 0)
+        payload = invocation.get("payload") if isinstance(invocation.get("payload"), dict) else {}
+        if isinstance(payload.get("agent_payload"), dict):
+            bounty_payload = dict(payload)
+            bounty_payload.update(dict(payload.get("agent_payload") or {}))
+        else:
+            bounty_payload = payload
+        billing_context = bounty_payload.get("billing_context")
+        if not isinstance(billing_context, dict):
+            billing_context = {}
+        billing_context = {
+            **dict(billing_context),
+            "invocation_id": invocation_id,
+            "requirement_id": str(
+                billing_context.get("requirement_id")
+                or bounty_payload.get("job_id")
+                or payload.get("job_id")
+                or ""
+            ),
+            "job_name": str(
+                billing_context.get("job_name")
+                or bounty_payload.get("job_name")
+                or payload.get("job_name")
+                or ""
+            ),
+        }
+        bounty_payload["billing_context"] = billing_context
+
+        if not self.run_bounty:
+            await self._complete(
+                invocation_id,
+                {
+                    "status": "cancelled",
+                    "error": "Agent has no bounty execution handler configured",
+                    "metadata": {
+                        "invocation_type": "bounty_execute",
+                        "billing_context": billing_context,
+                    },
+                },
+            )
+            return
+
+        await self._emit_events(
+            invocation_id,
+            [
+                {
+                    "event_type": "step",
+                    "message": "Executing bounty",
+                    "payload": {
+                        "status": "running",
+                        "job_id": str(bounty_payload.get("job_id") or payload.get("job_id") or ""),
+                    },
+                }
+            ],
+        )
+        result = await self.run_bounty(dict(bounty_payload))
+        ok = bool(result.get("ok"))
+        deliverable = result.get("deliverable") if isinstance(result.get("deliverable"), dict) else {}
+        status_text = str(deliverable.get("status") or ("succeeded" if ok else "failed"))
+        await self._emit_events(
+            invocation_id,
+            [
+                {
+                    "event_type": "bounty_result",
+                    "message": f"Bounty execution finished with {status_text}",
+                    "payload": result,
+                }
+            ],
+        )
+        await self._complete(
+            invocation_id,
+            {
+                "status": "succeeded" if ok else "failed",
+                "reply": str(result.get("summary") or status_text or ""),
+                "error": "" if ok else str(result.get("error") or "Bounty execution failed"),
+                "metadata": {
+                    "invocation_type": "bounty_execute",
+                    "billing_context": billing_context,
+                    "bounty_result": result,
+                    "deliverable": deliverable,
+                },
+            },
+        )
+
     async def _process_invocation(self, invocation: dict[str, Any]) -> None:
         invocation_id = int(invocation.get("id") or 0)
         invocation_type = str(invocation.get("invocation_type") or "").strip().lower()
         try:
             if invocation_type == "chat_turn":
                 await self._process_chat_turn(invocation)
+                return
+            if invocation_type in {"bounty_execute", "requirement_job"}:
+                await self._process_bounty_execute(invocation)
                 return
             await self._complete(
                 invocation_id,

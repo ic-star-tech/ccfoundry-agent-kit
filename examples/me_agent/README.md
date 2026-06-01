@@ -104,12 +104,15 @@ Use the SDK helper:
 from me_agent_example.app import FOUNDRY_BOOTSTRAP
 
 sandbox = FOUNDRY_BOOTSTRAP.sandbox_client()
-await sandbox.start()
+billing = {"invocation_id": 42, "requirement_id": "req-demo"}
+await sandbox.start(invocation_id=billing["invocation_id"], billing_context=billing)
 await sandbox.workspace_write("jobs/input.txt", "hello from ext agent")
 payload = await sandbox.terminal_exec("cat jobs/input.txt")
 print(payload["state"]["capture_text"])
-await sandbox.stop()
+await sandbox.stop(invocation_id=billing["invocation_id"])
 ```
+
+The bounty execution path also sends the same billing context as LiteLLM request metadata via `foundry_llm_metadata(...)`, so Foundry can deduct verified LLM cost from the task reward alongside sandbox runtime.
 
 ## Demo sandbox commands
 

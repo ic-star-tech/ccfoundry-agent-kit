@@ -172,6 +172,7 @@ class FoundryBootstrap:
         configured_identity = dict(config.developer_identity or {})
         if configured_identity and not dict(self.state.developer_identity or {}):
             self.state.developer_identity = configured_identity
+        self._seed_state_from_environment()
         self.callback_secret = str(config.callback_secret or self.state.env_vars.get("_bootstrap_callback_secret") or secrets.token_hex(24)).strip()
         self.state.env_vars["_bootstrap_callback_secret"] = self.callback_secret
         self._save_state()
@@ -189,6 +190,45 @@ class FoundryBootstrap:
             return FoundryBootstrapState.model_validate(payload)
         except Exception:
             return FoundryBootstrapState()
+
+    def _seed_state_from_environment(self) -> None:
+        """Restore approved pull-runtime state when the filesystem is ephemeral."""
+        registered_agent_name = os.getenv("FOUNDRY_REGISTERED_AGENT_NAME", "").strip()
+        if registered_agent_name:
+            self.state.registered_agent_name = registered_agent_name
+        registration_status = os.getenv("FOUNDRY_REGISTRATION_STATUS", "").strip().upper()
+        if registration_status:
+            self.state.registration_status = registration_status
+        approved_at = os.getenv("FOUNDRY_APPROVED_AT", "").strip()
+        if approved_at:
+            self.state.approved_at = approved_at
+        allocated_resources = os.getenv("FOUNDRY_ALLOCATED_RESOURCES_JSON", "").strip()
+        if allocated_resources:
+            try:
+                parsed_resources = json.loads(allocated_resources)
+            except Exception:
+                parsed_resources = None
+            if isinstance(parsed_resources, dict):
+                self.state.allocated_resources = parsed_resources
+
+        for key in (
+            "AGENT_SECRET",
+            "LLM_MODEL",
+            "LLM_API_KEY",
+            "LLM_API_BASE",
+            "LLM_ALLOWED_MODELS_JSON",
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "FOUNDRY_ALLOWED_MODELS_JSON",
+        ):
+            value = os.getenv(key, "").strip()
+            if value:
+                self.state.env_vars[key] = value
+
+        if self.state.registration_status == "APPROVED":
+            self.state.discovery_status = self.state.discovery_status or "REGISTERED"
+            self.state.approved_at = self.state.approved_at or _utcnow_iso()
+        self.state.has_agent_secret = bool(str(self.state.env_vars.get("AGENT_SECRET") or "").strip())
 
     def _save_state(self) -> None:
         self.state_path.write_text(

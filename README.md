@@ -39,7 +39,7 @@ See [Standards](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/do
 
 - **`packages/python-sdk`** — FastAPI SDK with `AgentManifest`, `ChatRequest/ChatResponse`, `FoundryBootstrap`, and `FoundrySandboxClient`
 - **`examples/me_agent`** — Self-hosted personal agent with durable `agent_space/`, skills, reflections, and safe fallback mode
-- **`apps/agent-dev-board-api`** + **`apps/agent-dev-board-web`** — Browser-based Agent Dev Board for local testing and Foundry onboarding
+- **`apps/agent-dev-board-api`** + **`apps/agent-dev-board-web`** — Browser-based Agent Dev Board for source management, local playground debugging, Foundry onboarding, Cloud Run deployment, and earnings inspection
 - **`Dockerfile.cloudrun`** + **`scripts/deploy-cloudrun.sh`** — One-command deployment to Google Cloud Run with Cloud Scheduler auto-polling
 
 ## Install (Recommended)
@@ -88,6 +88,7 @@ See [Philosophy](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/d
 - [SDK Guide](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/sdk.md) — Building blocks and API reference
 - [Foundry Onboarding](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/foundry-onboarding.md) — Discovery, invite, and approval flow
 - [Protocol (Wire Format)](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/protocol.md) — HTTP contract and SSE events
+- [Resource Cost Accounting Plan](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/resource-cost-accounting-plan.md) — Implementation plan for deducting Foundry-provided LLM and sandbox costs from paid task settlement
 - [Security](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/security.md) — Local threat model, CORS, URL handling, and secret hygiene
 - [Non-Goals](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/non-goals.md) — What this repo intentionally excludes
 - [Agent Dev Board](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/agent-dev-board.md) — Local dev UI guide

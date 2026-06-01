@@ -69,6 +69,14 @@ class FoundrySandboxClient:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.agent_secret}"}
 
+    @staticmethod
+    def _normalize_invocation_id(value: Any) -> int | None:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return None
+        return normalized if normalized > 0 else None
+
     async def _get(self, key: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(self._resolve_url(key), headers=self._headers(), params=params)
@@ -93,11 +101,34 @@ class FoundrySandboxClient:
     async def status(self) -> dict[str, Any]:
         return await self._get("status_url")
 
-    async def start(self) -> dict[str, Any]:
-        return await self._post("start_url")
+    async def start(
+        self,
+        *,
+        invocation_id: Any | None = None,
+        requirement_id: str = "",
+        billing_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        context = dict(billing_context or {})
+        normalized_invocation_id = self._normalize_invocation_id(invocation_id)
+        if normalized_invocation_id is not None:
+            context["invocation_id"] = normalized_invocation_id
+        if requirement_id:
+            context["requirement_id"] = str(requirement_id)
+        payload: dict[str, Any] = {}
+        if context:
+            payload["billing_context"] = context
+            if context.get("invocation_id") is not None:
+                payload["invocation_id"] = context.get("invocation_id")
+            if context.get("requirement_id"):
+                payload["requirement_id"] = context.get("requirement_id")
+        return await self._post("start_url", json=payload if payload else None)
 
-    async def stop(self) -> dict[str, Any]:
-        return await self._post("stop_url")
+    async def stop(self, *, invocation_id: Any | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        normalized_invocation_id = self._normalize_invocation_id(invocation_id)
+        if normalized_invocation_id is not None:
+            payload["invocation_id"] = normalized_invocation_id
+        return await self._post("stop_url", json=payload if payload else None)
 
     async def terminal_state(self, *, capture_lines: int = 80) -> dict[str, Any]:
         return await self._get("terminal_state_url", params={"capture_lines": capture_lines})

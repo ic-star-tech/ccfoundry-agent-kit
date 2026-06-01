@@ -177,8 +177,8 @@ def create_settlement_mandate(
     the agent's work.  The ``items`` list follows AP2's ``PaymentItem``::
 
         [
-            {"label": "llm_tokens",       "amount": 0.08, "currency": "USD"},
-            {"label": "sandbox_compute",   "amount": 0.05, "currency": "USD"},
+            {"label": "llm_cost",         "amount": -0.08, "currency": "USD"},
+            {"label": "sandbox_cost",     "amount": -0.05, "currency": "USD"},
             {"label": "task_reward",       "amount": 10.0, "currency": "USD"},
         ]
     """
