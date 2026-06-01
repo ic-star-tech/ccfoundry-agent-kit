@@ -270,7 +270,7 @@ type RetireAgentResult = {
 
 const API_PORT = import.meta.env.VITE_API_PORT || "8090";
 const DEFAULT_FOUNDRY_URL = "https://foundry.cochiper.com";
-const DEFAULT_CLOUD_RUN_POLL_SCHEDULE = "*/5 * * * *";
+const DEFAULT_CLOUD_RUN_POLL_SCHEDULE = "* * * * *";
 const CUSTOM_FOUNDRY_PRESET_ID = "__custom__";
 const FOUNDRY_URL_PRESETS = [
   { id: "cochiper-com", label: "CoChiper .com (CN)", url: "https://foundry.cochiper.com" },
@@ -3108,7 +3108,7 @@ export default function App() {
                           onChange={(event) => updateCloudRunForm("poll_schedule", event.target.value)}
                           placeholder={DEFAULT_CLOUD_RUN_POLL_SCHEDULE}
                         />
-                        <span className="field-helper">Cloud Scheduler cron. Default runs every 5 minutes.</span>
+                        <span className="field-helper">Cloud Scheduler cron. Default runs every minute.</span>
                       </label>
                     </div>
                     <label className="inline-toggle cloud-run-toggle">
@@ -4069,7 +4069,7 @@ export default function App() {
                         onChange={(event) => updateCloudRunForm("poll_schedule", event.target.value)}
                         placeholder={DEFAULT_CLOUD_RUN_POLL_SCHEDULE}
                       />
-                      <span className="field-helper">Cloud Scheduler cron. Default runs every 5 minutes.</span>
+                      <span className="field-helper">Cloud Scheduler cron. Default runs every minute.</span>
                     </label>
                   </div>
                   <label className="inline-toggle cloud-run-toggle">

@@ -70,7 +70,7 @@ This will:
 1. Build a Docker image locally
 2. Push it to Artifact Registry
 3. Deploy to Cloud Run with `AGENT_DEPLOY_MODE=cloud_run`
-4. Create a Cloud Scheduler job to poll every 5 minutes by default
+4. Create a Cloud Scheduler job to poll every minute by default
 
 ## Deploy From Agent Dev Board
 
@@ -114,7 +114,7 @@ for the selected source agent's registered Foundry identity, so bounty earnings
 from a Cloud Run worker are shown in the same Earnings view as local test
 settlements.
 
-The region field offers quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), but you can type another valid Cloud Run region ID. The poll schedule is a Cloud Scheduler cron expression; the default `*/5 * * * *` triggers `POST /foundry/poll` every 5 minutes. Use `* * * * *` only when you need one-minute polling.
+The region field offers quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), but you can type another valid Cloud Run region ID. The poll schedule is a Cloud Scheduler cron expression; the default `* * * * *` triggers `POST /foundry/poll` every minute.
 
 Deployment can take a few minutes because the board runs Docker build/push, creates a Cloud Run revision, updates the public URL env var, grants Scheduler invoker access, and creates or updates the Scheduler job. The UI polls the deployment job and shows elapsed time plus recent log lines while it runs.
 
@@ -132,7 +132,7 @@ Options:
   --min-instances <n>  Minimum instances (default: 0 = scale-to-zero)
   --memory <size>      Memory allocation (default: 512Mi)
   --cpu <n>            CPU allocation   (default: 1)
-  --poll-schedule <s>  Cloud Scheduler cron (default: "*/5 * * * *")
+  --poll-schedule <s>  Cloud Scheduler cron (default: "* * * * *")
   --foundry-url <url>  Foundry base URL
   --skip-scheduler     Don't create a Cloud Scheduler job
   --dry-run            Print commands without executing
@@ -183,7 +183,7 @@ gcloud run services add-iam-policy-binding my-agent \
 # Create the scheduler job
 gcloud scheduler jobs create http poll-my-agent \
   --location=us-central1 \
-  --schedule="*/5 * * * *" \
+  --schedule="* * * * *" \
   --uri="${SERVICE_URL}/foundry/poll" \
   --http-method=POST \
   --oidc-service-account-email="$SA_EMAIL" \

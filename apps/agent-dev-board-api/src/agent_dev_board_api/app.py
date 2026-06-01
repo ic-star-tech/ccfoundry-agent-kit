@@ -171,7 +171,7 @@ class CloudRunDeployRequest(BaseModel):
     min_instances: int = 0
     memory: str = "512Mi"
     cpu: str = "1"
-    poll_schedule: str = "*/5 * * * *"
+    poll_schedule: str = "* * * * *"
     skip_scheduler: bool = False
     dry_run: bool = False
 
