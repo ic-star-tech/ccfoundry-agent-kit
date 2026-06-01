@@ -457,9 +457,82 @@ async def _agent_bootstrap_state(agent: LiteAgentConfig) -> dict[str, Any]:
         return payload
 
     source_state, _ = _read_agent_source_bootstrap_state(agent.name)
+    cloud_run_state = await _agent_cloud_run_bootstrap_state(agent.name, source_state)
+    if cloud_run_state:
+        return _public_bootstrap_state(cloud_run_state)
     if source_state:
         return _public_bootstrap_state(source_state)
     return {"enabled": False}
+
+
+async def _metadata_identity_token(audience: str) -> str:
+    normalized_audience = str(audience or "").strip().rstrip("/")
+    if not normalized_audience:
+        return ""
+    metadata_url = (
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
+        f"?audience={quote(normalized_audience, safe='')}&format=full"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get(metadata_url, headers={"Metadata-Flavor": "Google"})
+        if response.is_success:
+            return response.text.strip()
+    except Exception:
+        return ""
+    return ""
+
+
+async def _agent_cloud_run_bootstrap_state(agent_name: str, source_state: dict[str, Any]) -> dict[str, Any]:
+    try:
+        deployments = CLOUD_RUN_MANAGER.list_deployments(limit=50)
+    except Exception:
+        return {}
+    normalized_agent_name = str(agent_name or "").strip()
+    for deployment in deployments:
+        if str(deployment.get("agent_name") or "").strip() != normalized_agent_name:
+            continue
+        if bool(deployment.get("dry_run")):
+            continue
+        result = deployment.get("result") if isinstance(deployment.get("result"), dict) else {}
+        service_url = str((result or {}).get("service_url") or "").strip().rstrip("/")
+        if not service_url:
+            continue
+        token = await _metadata_identity_token(service_url)
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                response = await client.get(f"{service_url}/foundry/bootstrap/state", headers=headers)
+        except Exception as exc:
+            logger.info("Cloud Run bootstrap state probe failed for %s: %s", service_url, exc)
+            continue
+        if not response.is_success:
+            logger.info("Cloud Run bootstrap state probe returned %s for %s", response.status_code, service_url)
+            continue
+        try:
+            remote_state = response.json()
+        except Exception:
+            continue
+        if not isinstance(remote_state, dict) or not remote_state.get("enabled"):
+            continue
+        merged = dict(source_state or {})
+        for key, value in remote_state.items():
+            if value is not None:
+                merged[key] = value
+        if source_state.get("discovery_claim_token"):
+            merged["discovery_claim_token"] = source_state["discovery_claim_token"]
+        if source_state.get("last_claimed_at") and not merged.get("last_claimed_at"):
+            merged["last_claimed_at"] = source_state["last_claimed_at"]
+        if isinstance(source_state.get("developer_identity"), dict) and source_state.get("developer_identity"):
+            merged.setdefault("developer_identity", source_state["developer_identity"])
+        source_path = _agent_source_state_path(normalized_agent_name)
+        if source_path:
+            try:
+                source_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as exc:
+                logger.info("Failed to cache Cloud Run bootstrap state at %s: %s", source_path, exc)
+        return merged
+    return {}
 
 
 def _agent_source_item(agent_name: str) -> dict[str, Any]:
