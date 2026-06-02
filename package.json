@@ -1,6 +1,6 @@
 {
   "name": "ccfoundry",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "CLI for CCFoundry Agent Kit and Agent Dev Board",
   "type": "module",
   "license": "MIT",
@@ -15,9 +15,11 @@
   "keywords": [
     "agent",
     "a2a",
+    "ap2",
     "mcp",
     "foundry",
     "dev-board",
+    "cloud-run",
     "openai"
   ],
   "bin": {
@@ -50,7 +52,9 @@
     "apps/agent-dev-board-web/public/brand/",
     "apps/agent-dev-board-web/src/",
     "docs/*.md",
+    "!docs/resource-cost-accounting-implementation-review.md",
     "docs/assets/readme-agent-dev-board-banner.svg",
+    "docs/assets/s2e-architecture.jpg",
     "schemas/",
     "!**/__pycache__/**",
     "!**/*.pyc"
