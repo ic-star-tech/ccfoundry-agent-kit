@@ -296,6 +296,7 @@ type RetireAgentResult = {
 
 const API_PORT = import.meta.env.VITE_API_PORT || "8090";
 const DEFAULT_FOUNDRY_URL = "https://foundry.cochiper.com";
+const DEFAULT_CLOUD_RUN_REGION = "europe-west2";
 const DEFAULT_CLOUD_RUN_POLL_SCHEDULE = "* * * * *";
 const CUSTOM_FOUNDRY_PRESET_ID = "__custom__";
 const FOUNDRY_URL_PRESETS = [
@@ -303,8 +304,8 @@ const FOUNDRY_URL_PRESETS = [
   { id: "cochiper-ai", label: "CoChiper .ai (WW)", url: "https://foundry.cochiper.ai" },
 ] as const;
 const CLOUD_RUN_REGION_OPTIONS = [
-  { value: "us-central1", label: "US Central (Iowa)" },
   { value: "europe-west2", label: "UK (London)" },
+  { value: "us-central1", label: "US Central (Iowa)" },
   { value: "asia-east2", label: "Hong Kong" },
   { value: "asia-southeast1", label: "Singapore" },
 ] as const;
@@ -394,6 +395,33 @@ function displaySafeUrl(rawUrl: string, fallback = "n/a"): string {
   }
 }
 
+const SENSITIVE_PLACEHOLDER = "[hidden]";
+const SENSITIVE_BLOCK_PLACEHOLDER = "[hidden while demo privacy is on]";
+
+function sensitiveDisplay(value: unknown, fallback = "n/a", reveal = true): string {
+  const rendered = textValue(value);
+  if (!rendered) {
+    return fallback;
+  }
+  return reveal ? rendered : SENSITIVE_PLACEHOLDER;
+}
+
+function sensitiveUrlDisplay(value: unknown, fallback = "n/a", reveal = true): string {
+  const rendered = textValue(value);
+  if (!rendered) {
+    return fallback;
+  }
+  return reveal ? displaySafeUrl(rendered, fallback) : SENSITIVE_PLACEHOLDER;
+}
+
+function sensitiveBlockDisplay(value: unknown, fallback = "", reveal = true): string {
+  const rendered = Array.isArray(value) ? value.join("\n") : textValue(value);
+  if (!rendered.trim()) {
+    return fallback;
+  }
+  return reveal ? rendered : SENSITIVE_BLOCK_PLACEHOLDER;
+}
+
 function boolValue(value: unknown): boolean {
   return value === true;
 }
@@ -462,12 +490,14 @@ function FoundryUrlChooser({
   onChange,
   placeholder = DEFAULT_FOUNDRY_URL,
   helper = "",
+  maskValue = false,
 }: {
   label: string;
   value: string;
   onChange: (nextValue: string) => void;
   placeholder?: string;
   helper?: string;
+  maskValue?: boolean;
 }) {
   return (
     <div className="foundry-url-picker">
@@ -486,14 +516,20 @@ function FoundryUrlChooser({
             <option value={CUSTOM_FOUNDRY_PRESET_ID}>Custom / other</option>
             {FOUNDRY_URL_PRESETS.map((preset) => (
               <option key={preset.id} value={preset.id}>
-                {preset.label} ({preset.url})
+                {maskValue ? preset.label : `${preset.label} (${preset.url})`}
               </option>
             ))}
           </select>
         </label>
         <label>
           {label}
-          <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+          <input
+            type={maskValue ? "password" : "text"}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder={placeholder}
+            autoComplete="off"
+          />
         </label>
       </div>
       {helper ? <p className="muted foundry-url-helper">{helper}</p> : null}
@@ -1529,6 +1565,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [activeView, setActiveView] = useState<BoardView>("guide");
   const [agentCardTab, setAgentCardTab] = useState<AgentCardTab>("overview");
+  const [showSensitiveInfo, setShowSensitiveInfo] = useState(false);
   const [devModeEnabled, setDevModeEnabled] = useState(false);
   const [devOverrides, setDevOverrides] = useState<DevOverrides>({
     model: "",
@@ -1588,7 +1625,7 @@ export default function App() {
   const [cloudRunAuthCode, setCloudRunAuthCode] = useState("");
   const [cloudRunForm, setCloudRunForm] = useState<CloudRunForm>({
     project: "",
-    region: "us-central1",
+    region: DEFAULT_CLOUD_RUN_REGION,
     memory: "512Mi",
     cpu: "1",
     min_instances: "0",
@@ -1689,6 +1726,10 @@ export default function App() {
       ),
     ) || DEFAULT_FOUNDRY_URL;
   const foundryPortalDisplayUrl = displaySafeUrl(foundryPortalUrl);
+  const maskedFoundryPortalDisplayUrl = sensitiveUrlDisplay(foundryPortalUrl, "n/a", showSensitiveInfo);
+  const displaySensitive = (value: unknown, fallback = "n/a") => sensitiveDisplay(value, fallback, showSensitiveInfo);
+  const displaySensitiveUrl = (value: unknown, fallback = "n/a") => sensitiveUrlDisplay(value, fallback, showSensitiveInfo);
+  const displaySensitiveBlock = (value: unknown, fallback = "") => sensitiveBlockDisplay(value, fallback, showSensitiveInfo);
   const displayedDeveloperLogin = textValue(
     foundryBootstrapSession?.github_login,
     textValue(developerGithub.login, "not detected"),
@@ -2332,9 +2373,12 @@ export default function App() {
       setCloudRunForm((prev) => ({
         ...prev,
         project: prev.project || textValue(defaults.project),
-        region: prev.region || textValue(defaults.region, "us-central1"),
+        region: prev.region || textValue(defaults.region, DEFAULT_CLOUD_RUN_REGION),
       }));
-      void refreshCloudRunRuntimes(textValue(defaults.project), textValue(defaults.region, "us-central1"));
+      void refreshCloudRunRuntimes(
+        textValue(defaults.project),
+        textValue(cloudRunForm.region, textValue(defaults.region, DEFAULT_CLOUD_RUN_REGION)),
+      );
     } catch (err) {
       setCloudRunError(String(err));
     } finally {
@@ -2817,6 +2861,36 @@ export default function App() {
 
       <main className="workspace">
         <div className="workspace-toolbar">
+          <button
+            type="button"
+            className={`external-link-chip privacy-toggle ${showSensitiveInfo ? "active" : ""}`}
+            onClick={() => setShowSensitiveInfo((current) => !current)}
+            aria-pressed={showSensitiveInfo}
+            aria-label={showSensitiveInfo ? "Hide sensitive information" : "Show sensitive information"}
+            title={showSensitiveInfo ? "Hide sensitive information" : "Show sensitive information"}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"
+              />
+              <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
+              {showSensitiveInfo ? (
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeWidth="2"
+                  d="M4 4l16 16"
+                />
+              ) : null}
+            </svg>
+            <span className="sr-only">{showSensitiveInfo ? "Hide sensitive information" : "Show sensitive information"}</span>
+          </button>
           <a
             className="external-link-chip"
             href="https://github.com/ic-star-tech/ccfoundry-agent-kit"
@@ -2838,11 +2912,11 @@ export default function App() {
             href={foundryPortalUrl}
             target="_blank"
             rel="noreferrer"
-            aria-label={`Open Foundry (${foundryPortalDisplayUrl})`}
-            title={`Open Foundry (${foundryPortalDisplayUrl})`}
+            aria-label={`Open Foundry (${maskedFoundryPortalDisplayUrl})`}
+            title={`Open Foundry (${maskedFoundryPortalDisplayUrl})`}
           >
             <img className="external-link-logo" src={CC_LOGO_URL} alt="" aria-hidden="true" />
-            <span className="sr-only">Open Foundry ({foundryPortalDisplayUrl})</span>
+            <span className="sr-only">{`Open Foundry (${maskedFoundryPortalDisplayUrl})`}</span>
           </a>
         </div>
 
@@ -2915,7 +2989,7 @@ export default function App() {
                     <p>
                       Source agent: <code>{selectedLocalAgent.name}</code>. Local debug runtime is{" "}
                       <code>{textValue(selectedLocalAgent.status, "unknown")}</code> at{" "}
-                      <code>{displaySafeUrl(selectedLocalAgent.base_url)}</code>.
+                      <code>{displaySensitiveUrl(selectedLocalAgent.base_url)}</code>.
                     </p>
                   </div>
                 ) : null}
@@ -3021,7 +3095,7 @@ export default function App() {
                       </div>
                       <div>
                         <span>Debug URL</span>
-                        <strong>{displaySafeUrl(textValue(selectedLocalAgent?.base_url), "not running")}</strong>
+                        <strong>{displaySensitiveUrl(selectedLocalAgent?.base_url, "not running")}</strong>
                       </div>
                       <div>
                         <span>Runtime status</span>
@@ -3068,11 +3142,13 @@ export default function App() {
                     <div className="kv-list compact-kv">
                       <div>
                         <span>Google account</span>
-                        <strong>{textValue(cloudRunStatus?.gcloud?.active_account, "not authenticated")}</strong>
+                        <strong>{displaySensitive(cloudRunStatus?.gcloud?.active_account, "not authenticated")}</strong>
                       </div>
                       <div>
                         <span>Cloud Run project</span>
-                        <strong>{textValue(cloudRunForm.project, textValue(cloudRunStatus?.defaults?.project, "not set"))}</strong>
+                        <strong>
+                          {displaySensitive(cloudRunForm.project, displaySensitive(cloudRunStatus?.defaults?.project, "not set"))}
+                        </strong>
                       </div>
                       <div>
                         <span>Deployment</span>
@@ -3081,7 +3157,7 @@ export default function App() {
                     </div>
                     {!cloudRunStatus?.gcloud?.authenticated ? (
                       <div className="code-block compact-code-block">
-                        <pre>{textValue(cloudRunStatus?.commands?.login_no_browser, "gcloud auth login --no-launch-browser")}</pre>
+                        <pre>{displaySensitiveBlock(cloudRunStatus?.commands?.login_no_browser, "gcloud auth login --no-launch-browser")}</pre>
                       </div>
                     ) : null}
                     <div className="actions split-actions compact-actions">
@@ -3114,7 +3190,7 @@ export default function App() {
                           </a>
                         ) : (
                           <div className="code-block compact-code-block">
-                            <pre>{(cloudRunAuthSession.logs || []).slice(-4).join("\n") || "Waiting for Google login URL..."}</pre>
+                            <pre>{displaySensitiveBlock((cloudRunAuthSession.logs || []).slice(-4), "Waiting for Google login URL...")}</pre>
                           </div>
                         )}
                         {cloudRunAuthInProgress ? (
@@ -3122,9 +3198,11 @@ export default function App() {
                             <label>
                               Authorization code
                               <input
+                                type={showSensitiveInfo ? "text" : "password"}
                                 value={cloudRunAuthCode}
                                 onChange={(event) => setCloudRunAuthCode(event.target.value)}
                                 placeholder="Paste code from Google"
+                                autoComplete="off"
                               />
                             </label>
                             <button onClick={submitCloudRunAuthCode} disabled={cloudRunAuthLoading || !cloudRunAuthCode.trim()}>
@@ -3139,9 +3217,11 @@ export default function App() {
                       <label>
                         GCP project
                         <input
+                          type={showSensitiveInfo ? "text" : "password"}
                           value={cloudRunForm.project}
                           onChange={(event) => updateCloudRunForm("project", event.target.value)}
                           placeholder="your-gcp-project"
+                          autoComplete="off"
                         />
                       </label>
                       <label>
@@ -3150,9 +3230,9 @@ export default function App() {
                           list="cloud-run-region-options"
                           value={cloudRunForm.region}
                           onChange={(event) => updateCloudRunForm("region", event.target.value)}
-                          placeholder="us-central1"
+                          placeholder={DEFAULT_CLOUD_RUN_REGION}
                         />
-                        <span className="field-helper">Quick picks: US, UK London, Hong Kong, Singapore.</span>
+                        <span className="field-helper">Quick picks: UK London, US, Hong Kong, Singapore.</span>
                       </label>
                       <label>
                         Memory
@@ -3252,11 +3332,11 @@ export default function App() {
                           </div>
                           <div>
                             <span>Service URL</span>
-                            <strong>{displaySafeUrl(textValue(displayedCloudRunDeployment.result?.service_url), "pending")}</strong>
+                            <strong>{displaySensitiveUrl(displayedCloudRunDeployment.result?.service_url, "pending")}</strong>
                           </div>
                         </div>
                         <div className="code-block compact-code-block cloud-run-progress-log">
-                          <pre>{latestCloudRunDeploymentLogs.join("\n") || "Waiting for deployment output..."}</pre>
+                          <pre>{displaySensitiveBlock(latestCloudRunDeploymentLogs, "Waiting for deployment output...")}</pre>
                         </div>
                       </div>
                     ) : null}
@@ -3287,11 +3367,12 @@ export default function App() {
                   label="Foundry URL"
                   value={foundryUrl}
                   onChange={setFoundryUrl}
+                  maskValue={!showSensitiveInfo}
                   helper=".com is the CN target, .ai is the WW target. You can still type any other compatible Foundry URL."
                 />
                 {developerSessionReady ? (
                   <div className="reply">
-                    <strong>{displayedDeveloperLogin}</strong>
+                    <strong>{displaySensitive(displayedDeveloperLogin, "not detected")}</strong>
                     <p>Developer bootstrap session is ready. Token TTL: {foundryBootstrapSession?.expires_in_minutes || 30} min.</p>
                   </div>
                 ) : (
@@ -3309,10 +3390,11 @@ export default function App() {
                   <label>
                     Completion email
                     <input
-                      type="email"
+                      type={showSensitiveInfo ? "email" : "password"}
                       value={notificationEmail}
                       onChange={(event) => setNotificationEmail(event.target.value)}
                       placeholder="developer@example.com"
+                      autoComplete="off"
                     />
                   </label>
                   <div className="notification-row">
@@ -3494,7 +3576,7 @@ export default function App() {
                       </div>
                       <div>
                         <span>Service URL</span>
-                        <strong>{displaySafeUrl(textValue(displayedCloudRunDeployment?.result?.service_url), "pending")}</strong>
+                        <strong>{displaySensitiveUrl(displayedCloudRunDeployment?.result?.service_url, "pending")}</strong>
                       </div>
                       <div>
                         <span>Scheduler</span>
@@ -3511,7 +3593,7 @@ export default function App() {
                       </div>
                       <div>
                         <span>Poll endpoint</span>
-                        <strong>{displaySafeUrl(textValue(displayedCloudRunDeployment?.result?.poll_url), "pending")}</strong>
+                        <strong>{displaySensitiveUrl(displayedCloudRunDeployment?.result?.poll_url, "pending")}</strong>
                       </div>
                     </div>
                     {smokeObserved ? (
@@ -3583,16 +3665,22 @@ export default function App() {
                   <div>
                     <h4>Test the agent in Foundry</h4>
                     <p className="muted">
-                      Use the same Foundry target as the GitHub login, or switch it here before you open <code>{foundryPortalUrl}</code>{" "}
+                      Use the same Foundry target as the GitHub login, or switch it here before you open{" "}
+                      <code>{displaySensitiveUrl(foundryPortalUrl)}</code>{" "}
                       to validate the same agent inside the live Foundry product after bootstrap is approved.
                     </p>
                   </div>
                 </div>
-                <FoundryUrlChooser label="Foundry portal URL" value={foundryUrl} onChange={setFoundryUrl} />
+                <FoundryUrlChooser
+                  label="Foundry portal URL"
+                  value={foundryUrl}
+                  onChange={setFoundryUrl}
+                  maskValue={!showSensitiveInfo}
+                />
                 <div className="kv-list compact-kv">
                   <div>
                     <span>Portal target</span>
-                    <strong>{displaySafeUrl(foundryPortalUrl)}</strong>
+                    <strong>{displaySensitiveUrl(foundryPortalUrl)}</strong>
                   </div>
                   <div>
                     <span>Foundry access</span>
@@ -3698,15 +3786,15 @@ export default function App() {
                   <div className="kv-list compact-kv">
                     <div>
                       <span>Local debug URL</span>
-                      <strong>{displaySafeUrl(textValue(selectedAgentEntry?.base_url), "n/a")}</strong>
+                      <strong>{displaySensitiveUrl(selectedAgentEntry?.base_url, "n/a")}</strong>
                     </div>
                     <div>
                       <span>Foundry URL</span>
-                      <strong>{textValue(handshakeResult?.foundry.url, textValue(bootstrapState.foundry_base_url, "n/a"))}</strong>
+                      <strong>{displaySensitive(handshakeResult?.foundry.url, displaySensitive(bootstrapState.foundry_base_url, "n/a"))}</strong>
                     </div>
                     <div>
                       <span>GitHub login</span>
-                      <strong>{displayedDeveloperLogin}</strong>
+                      <strong>{displaySensitive(displayedDeveloperLogin, "not detected")}</strong>
                     </div>
                     <div>
                       <span>Bootstrap delivery</span>
@@ -3744,7 +3832,7 @@ export default function App() {
                     </div>
                     <div>
                       <span>Developer login</span>
-                      <strong>{developerSessionReady ? displayedDeveloperLogin : "required"}</strong>
+                      <strong>{developerSessionReady ? displaySensitive(displayedDeveloperLogin, "not detected") : "required"}</strong>
                     </div>
                   </div>
                   {!developerSessionReady ? (
@@ -3825,6 +3913,7 @@ export default function App() {
                     label="Foundry URL for bootstrap"
                     value={foundryUrl}
                     onChange={setFoundryUrl}
+                    maskValue={!showSensitiveInfo}
                     helper=".com is the CN target, .ai is the WW target. You can still type any other compatible Foundry URL."
                   />
                   <div className="actions split-actions">
@@ -3878,7 +3967,7 @@ export default function App() {
                             <div className="kv-list compact-kv">
                               <div>
                                 <span>Base URL</span>
-                                <strong>{displaySafeUrl(agent.base_url)}</strong>
+                                <strong>{displaySensitiveUrl(agent.base_url)}</strong>
                               </div>
                               <div>
                                 <span>Port</span>
@@ -3886,7 +3975,7 @@ export default function App() {
                               </div>
                               <div>
                                 <span>Foundry</span>
-                                <strong>{textValue(agent.foundry_url, "not set")}</strong>
+                                <strong>{displaySensitive(agent.foundry_url, "not set")}</strong>
                               </div>
                               <div>
                                 <span>PID</span>
@@ -3894,11 +3983,11 @@ export default function App() {
                               </div>
                               <div>
                                 <span>Instance dir</span>
-                                <strong>{agent.instance_dir}</strong>
+                                <strong>{displaySensitive(agent.instance_dir)}</strong>
                               </div>
                               <div>
                                 <span>Log file</span>
-                                <strong>{textValue(agent.log_path, "n/a")}</strong>
+                                <strong>{displaySensitive(agent.log_path, "n/a")}</strong>
                               </div>
                             </div>
                             <div className="actions split-actions">
@@ -3964,15 +4053,15 @@ export default function App() {
                   <div className="kv-list compact-kv">
                     <div>
                       <span>Account</span>
-                      <strong>{textValue(cloudRunStatus?.gcloud?.active_account, "not authenticated")}</strong>
+                      <strong>{displaySensitive(cloudRunStatus?.gcloud?.active_account, "not authenticated")}</strong>
                     </div>
                     <div>
                       <span>Project</span>
-                      <strong>{textValue(cloudRunStatus?.gcloud?.project, textValue(cloudRunStatus?.defaults?.project, "not set"))}</strong>
+                      <strong>{displaySensitive(cloudRunStatus?.gcloud?.project, displaySensitive(cloudRunStatus?.defaults?.project, "not set"))}</strong>
                     </div>
                     <div>
                       <span>Region</span>
-                      <strong>{textValue(cloudRunStatus?.gcloud?.region, textValue(cloudRunStatus?.defaults?.region, "us-central1"))}</strong>
+                      <strong>{textValue(cloudRunStatus?.gcloud?.region, textValue(cloudRunStatus?.defaults?.region, DEFAULT_CLOUD_RUN_REGION))}</strong>
                     </div>
                     <div>
                       <span>gcloud</span>
@@ -3985,7 +4074,7 @@ export default function App() {
                   </div>
                   {!cloudRunStatus?.gcloud?.authenticated ? (
                     <div className="code-block">
-                      <pre>{textValue(cloudRunStatus?.commands?.login_no_browser, "gcloud auth login --no-launch-browser")}</pre>
+                      <pre>{displaySensitiveBlock(cloudRunStatus?.commands?.login_no_browser, "gcloud auth login --no-launch-browser")}</pre>
                     </div>
                   ) : null}
                   <div className="actions split-actions">
@@ -4018,7 +4107,7 @@ export default function App() {
                         </a>
                       ) : (
                         <div className="code-block compact-code-block">
-                          <pre>{(cloudRunAuthSession.logs || []).slice(-4).join("\n") || "Waiting for Google login URL..."}</pre>
+                          <pre>{displaySensitiveBlock((cloudRunAuthSession.logs || []).slice(-4), "Waiting for Google login URL...")}</pre>
                         </div>
                       )}
                       {cloudRunAuthInProgress ? (
@@ -4026,9 +4115,11 @@ export default function App() {
                           <label>
                             Authorization code
                             <input
+                              type={showSensitiveInfo ? "text" : "password"}
                               value={cloudRunAuthCode}
                               onChange={(event) => setCloudRunAuthCode(event.target.value)}
                               placeholder="Paste code from Google"
+                              autoComplete="off"
                             />
                           </label>
                           <button onClick={submitCloudRunAuthCode} disabled={cloudRunAuthLoading || !cloudRunAuthCode.trim()}>
@@ -4073,12 +4164,13 @@ export default function App() {
                     label="Foundry URL"
                     value={foundryUrl}
                     onChange={setFoundryUrl}
+                    maskValue={!showSensitiveInfo}
                     helper="The Cloud Run worker registers against this Foundry and uses pull transport."
                   />
                   <div className="kv-list compact-kv">
                     <div>
                       <span>Source path</span>
-                      <strong>{textValue(selectedLocalAgent?.instance_dir, "select a source agent")}</strong>
+                      <strong>{displaySensitive(selectedLocalAgent?.instance_dir, "select a source agent")}</strong>
                     </div>
                     <div>
                       <span>Template</span>
@@ -4087,7 +4179,7 @@ export default function App() {
                     <div>
                       <span>Local debug runtime</span>
                       <strong>
-                        {textValue(selectedLocalAgent?.status, "unknown")} · {displaySafeUrl(textValue(selectedLocalAgent?.base_url), "n/a")}
+                        {textValue(selectedLocalAgent?.status, "unknown")} · {displaySensitiveUrl(selectedLocalAgent?.base_url, "n/a")}
                       </strong>
                     </div>
                   </div>
@@ -4106,7 +4198,7 @@ export default function App() {
                   <div className="kv-list compact-kv">
                     <div>
                       <span>Project</span>
-                      <strong>{textValue(cloudRunRuntimes?.project, textValue(cloudRunStatus?.defaults?.project, "not set"))}</strong>
+                      <strong>{displaySensitive(cloudRunRuntimes?.project, displaySensitive(cloudRunStatus?.defaults?.project, "not set"))}</strong>
                     </div>
                     <div>
                       <span>Region</span>
@@ -4145,7 +4237,7 @@ export default function App() {
                             <div className="kv-list compact-kv">
                               <div>
                                 <span>Service URL</span>
-                                <strong>{displaySafeUrl(textValue(runtime.url), "pending")}</strong>
+                                <strong>{displaySensitiveUrl(runtime.url, "pending")}</strong>
                               </div>
                               <div>
                                 <span>Scheduler</span>
@@ -4161,7 +4253,7 @@ export default function App() {
                               </div>
                               <div>
                                 <span>Foundry</span>
-                                <strong>{displaySafeUrl(textValue(runtime.foundry_url), "n/a")}</strong>
+                                <strong>{displaySensitiveUrl(runtime.foundry_url, "n/a")}</strong>
                               </div>
                             </div>
                             {hasSource ? (
@@ -4195,9 +4287,11 @@ export default function App() {
                     <label>
                       GCP project
                       <input
+                        type={showSensitiveInfo ? "text" : "password"}
                         value={cloudRunForm.project}
                         onChange={(event) => updateCloudRunForm("project", event.target.value)}
                         placeholder="your-gcp-project"
+                        autoComplete="off"
                       />
                     </label>
                     <label>
@@ -4206,9 +4300,9 @@ export default function App() {
                         list="cloud-run-region-options"
                         value={cloudRunForm.region}
                         onChange={(event) => updateCloudRunForm("region", event.target.value)}
-                        placeholder="us-central1"
+                        placeholder={DEFAULT_CLOUD_RUN_REGION}
                       />
-                      <span className="field-helper">Quick picks: US, UK London, Hong Kong, Singapore.</span>
+                      <span className="field-helper">Quick picks: UK London, US, Hong Kong, Singapore.</span>
                     </label>
                     <label>
                       Memory
@@ -4302,11 +4396,11 @@ export default function App() {
                         </div>
                         <div>
                           <span>Image</span>
-                          <strong>{textValue(cloudRunCurrentJob.result?.image_tag, "pending")}</strong>
+                          <strong>{displaySensitive(cloudRunCurrentJob.result?.image_tag, "pending")}</strong>
                         </div>
                         <div>
                           <span>Service URL</span>
-                          <strong>{displaySafeUrl(textValue(cloudRunCurrentJob.result?.service_url), "pending")}</strong>
+                          <strong>{displaySensitiveUrl(cloudRunCurrentJob.result?.service_url, "pending")}</strong>
                         </div>
                         <div>
                           <span>Scheduler</span>
@@ -4324,7 +4418,7 @@ export default function App() {
                         </div>
                       ) : null}
                       <div className="code-block cloud-run-log">
-                        <pre>{(cloudRunCurrentJob.logs || []).join("\n") || "Waiting for deployment output..."}</pre>
+                        <pre>{displaySensitiveBlock(cloudRunCurrentJob.logs || [], "Waiting for deployment output...")}</pre>
                       </div>
                     </>
                   ) : (
@@ -4393,11 +4487,11 @@ export default function App() {
                     </div>
                     <div>
                       <span>Foundry URL</span>
-                      <strong>{textValue(handshakeResult?.foundry.url, textValue(bootstrapState.foundry_base_url, "n/a"))}</strong>
+                      <strong>{displaySensitive(handshakeResult?.foundry.url, displaySensitive(bootstrapState.foundry_base_url, "n/a"))}</strong>
                     </div>
                     <div>
                       <span>GitHub login</span>
-                      <strong>{displayedDeveloperLogin}</strong>
+                      <strong>{displaySensitive(displayedDeveloperLogin, "not detected")}</strong>
                     </div>
                   </div>
                   {latestLlmError ? (
@@ -4438,10 +4532,12 @@ export default function App() {
                   <label>
                     Base URL
                     <input
+                      type={showSensitiveInfo ? "text" : "password"}
                       value={devOverrides.base_url}
                       onChange={(event) => updateDevOverride("base_url", event.target.value)}
                       placeholder="http://localhost:4000"
                       disabled={!devModeEnabled}
+                      autoComplete="off"
                     />
                   </label>
                   <label>
@@ -4719,16 +4815,20 @@ export default function App() {
                     </div>
                     <div className="metric-card">
                       <span className="metric-label">Selected source</span>
-                      <strong>{textValue(settlementsMeta.agent_name, textValue(selectedLocalAgent?.name, "all sources"))}</strong>
+                      <strong>{displaySensitive(settlementsMeta.agent_name, displaySensitive(selectedLocalAgent?.name, "all sources"))}</strong>
                       <span className="muted" style={{ fontSize: "0.84rem" }}>
                         {textValue(selectedLocalAgent?.status, "source")} local debug runtime
                       </span>
                     </div>
                     <div className="metric-card">
                       <span className="metric-label">Foundry identity</span>
-                      <strong>{textValue(settlementsMeta.foundry_agent_name, "not registered yet")}</strong>
+                      <strong>{displaySensitive(settlementsMeta.foundry_agent_name, "not registered yet")}</strong>
                       <span className="muted" style={{ fontSize: "0.84rem" }}>
-                        {matchedNames.length ? `matching ${matchedNames.join(", ")}` : "runtime-agnostic earnings"}
+                        {matchedNames.length
+                          ? showSensitiveInfo
+                            ? `matching ${matchedNames.join(", ")}`
+                            : "matching [hidden]"
+                          : "runtime-agnostic earnings"}
                       </span>
                     </div>
                     <div className="metric-card">
@@ -4749,8 +4849,10 @@ export default function App() {
                         }}
                       >
                         <option value="__all__">All settlement names ({uniqueAgents.length})</option>
-                        {uniqueAgents.map((name) => (
-                          <option key={name} value={name}>{name}</option>
+                        {uniqueAgents.map((name, index) => (
+                          <option key={name} value={name}>
+                            {showSensitiveInfo ? name : `Settlement agent ${index + 1}`}
+                          </option>
                         ))}
                       </select>
                       <span className="muted" style={{ fontSize: "0.84rem" }}>
@@ -4819,11 +4921,11 @@ export default function App() {
                             <div className="kv-list" style={{ fontSize: "0.9rem" }}>
                               <div>
                                 <span>Task</span>
-                                <strong>{reqName}</strong>
+                                <strong>{displaySensitive(reqName, "n/a")}</strong>
                               </div>
                               <div>
                                 <span>Agent</span>
-                                <strong>{agentName}</strong>
+                                <strong>{displaySensitive(agentName, "n/a")}</strong>
                               </div>
                               <div>
                                 <span>Gross reward</span>
@@ -4840,19 +4942,19 @@ export default function App() {
                               {moduleName ? (
                                 <div>
                                   <span>Module</span>
-                                  <strong style={{ fontFamily: "monospace" }}>{moduleName}</strong>
+                                  <strong style={{ fontFamily: "monospace" }}>{displaySensitive(moduleName, "n/a")}</strong>
                                 </div>
                               ) : null}
                               <div>
                                 <span>Settlement ID</span>
                                 <strong style={{ fontFamily: "monospace", fontSize: "0.82rem" }}>
-                                  {settlementId || "—"}
+                                  {displaySensitive(settlementId, "n/a")}
                                 </strong>
                               </div>
                               {reason ? (
                                 <div>
                                   <span>Reason</span>
-                                  <strong>{reason}</strong>
+                                  <strong>{displaySensitive(reason, "n/a")}</strong>
                                 </div>
                               ) : null}
                               {settledAt ? (
@@ -4873,7 +4975,11 @@ export default function App() {
                                 <div>
                                   <span>Payment provider</span>
                                   <strong>
-                                    {paymentReference.length > 24 ? `${paymentReference.slice(0, 24)}...` : paymentReference}
+                                    {showSensitiveInfo
+                                      ? paymentReference.length > 24
+                                        ? `${paymentReference.slice(0, 24)}...`
+                                        : paymentReference
+                                      : SENSITIVE_PLACEHOLDER}
                                   </strong>
                                 </div>
                               ) : paymentStatus ? (

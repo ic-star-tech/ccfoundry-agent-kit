@@ -220,11 +220,13 @@ textarea {
   justify-content: center;
   width: 48px;
   height: 48px;
+  padding: 0;
   border-radius: 18px;
   border: 1px solid rgba(214, 222, 239, 0.92);
   background: rgba(255, 255, 255, 0.72);
   color: var(--accent);
   text-decoration: none;
+  box-shadow: none;
   transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
 }
 
@@ -237,6 +239,11 @@ textarea {
 .external-link-chip svg {
   width: 22px;
   height: 22px;
+}
+
+.privacy-toggle.active {
+  border-color: rgba(42, 99, 255, 0.34);
+  background: var(--accent-soft);
 }
 
 .external-link-logo {

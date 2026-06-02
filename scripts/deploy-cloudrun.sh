@@ -7,7 +7,7 @@
 #
 # Options:
 #   --project <id>       GCP project ID (defaults to active gcloud project)
-#   --region <region>    Cloud Run region (default: us-central1)
+#   --region <region>    Cloud Run region (default: europe-west2)
 #   --agent-space <path> Path to agent_space directory to deploy
 #   --min-instances <n>  Minimum instances (default: 0 = scale-to-zero)
 #   --memory <size>      Memory allocation (default: 512Mi)
@@ -24,7 +24,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 GCP_PROJECT="${GCP_PROJECT:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-}}}"
-GCP_REGION="us-central1"
+GCP_REGION="europe-west2"
 AR_REPO="ccfoundry-agents"
 AGENT_SPACE=""
 MIN_INSTANCES=0

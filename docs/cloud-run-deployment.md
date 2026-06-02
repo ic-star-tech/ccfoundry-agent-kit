@@ -10,7 +10,7 @@ fleet-wide operations stack. See [Non-Goals](non-goals.md) for the boundary.
 ## Architecture
 
 ```
-Cloud Scheduler (default every 5 min)
+Cloud Scheduler (default every minute)
     ↓ POST + OIDC Token
 Cloud Run (agent container, scale-to-zero)
     ↓ /foundry/poll
@@ -46,14 +46,14 @@ Create a Docker repository to store agent images:
 ```bash
 gcloud artifacts repositories create ccfoundry-agents \
   --repository-format=docker \
-  --location=us-central1 \
+  --location=europe-west2 \
   --project=YOUR_PROJECT_ID
 ```
 
 ### Docker Authentication
 
 ```bash
-gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+gcloud auth configure-docker europe-west2-docker.pkg.dev --quiet
 ```
 
 ## Quick Deploy
@@ -125,7 +125,7 @@ cache has the worker's full discovery and invite state. Cloud Run onboarding is
 therefore considered complete only after discovery is registered, the invite is
 redeemed, registration is approved, and a worker poll has been observed.
 
-The region field offers quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), but you can type another valid Cloud Run region ID. The poll schedule is a Cloud Scheduler cron expression; the default `* * * * *` triggers `POST /foundry/poll` every minute.
+The default region is `europe-west2` (UK London). The region field offers quick picks for `europe-west2` (UK London), `us-central1`, `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), but you can type another valid Cloud Run region ID. The poll schedule is a Cloud Scheduler cron expression; the default `* * * * *` triggers `POST /foundry/poll` every minute.
 
 Deployment can take a few minutes because the board runs Docker build/push, creates a Cloud Run revision, updates the public URL env var, grants Scheduler invoker access, and creates or updates the Scheduler job. The UI polls the deployment job and shows elapsed time plus recent log lines while it runs.
 
@@ -138,7 +138,7 @@ Usage: ./scripts/deploy-cloudrun.sh <agent-name> [options]
 
 Options:
   --project <id>       GCP project ID (defaults to active gcloud project)
-  --region <region>    Cloud Run region (default: us-central1)
+  --region <region>    Cloud Run region (default: europe-west2)
   --agent-space <path> Path to agent_space directory to deploy
   --min-instances <n>  Minimum instances (default: 0 = scale-to-zero)
   --memory <size>      Memory allocation (default: 512Mi)
@@ -155,13 +155,13 @@ Options:
 
 ```bash
 docker build -f Dockerfile.cloudrun \
-  -t us-central1-docker.pkg.dev/YOUR_PROJECT/ccfoundry-agents/my-agent:latest .
+  -t europe-west2-docker.pkg.dev/YOUR_PROJECT/ccfoundry-agents/my-agent:latest .
 ```
 
 ### Step 2: Push to Artifact Registry
 
 ```bash
-docker push us-central1-docker.pkg.dev/YOUR_PROJECT/ccfoundry-agents/my-agent:latest
+docker push europe-west2-docker.pkg.dev/YOUR_PROJECT/ccfoundry-agents/my-agent:latest
 ```
 
 ### Step 3: Deploy to Cloud Run
@@ -169,8 +169,8 @@ docker push us-central1-docker.pkg.dev/YOUR_PROJECT/ccfoundry-agents/my-agent:la
 ```bash
 gcloud run deploy my-agent \
   --project=YOUR_PROJECT \
-  --region=us-central1 \
-  --image=us-central1-docker.pkg.dev/YOUR_PROJECT/ccfoundry-agents/my-agent:latest \
+  --region=europe-west2 \
+  --image=europe-west2-docker.pkg.dev/YOUR_PROJECT/ccfoundry-agents/my-agent:latest \
   --port=8080 \
   --memory=512Mi \
   --min-instances=0 \
@@ -182,18 +182,18 @@ gcloud run deploy my-agent \
 ### Step 4: Create Cloud Scheduler Job
 
 ```bash
-SERVICE_URL=$(gcloud run services describe my-agent --region=us-central1 --format="value(status.url)")
+SERVICE_URL=$(gcloud run services describe my-agent --region=europe-west2 --format="value(status.url)")
 SA_EMAIL="$(gcloud projects describe YOUR_PROJECT --format='value(projectNumber)')-compute@developer.gserviceaccount.com"
 
 # Grant invoker role to the service account
 gcloud run services add-iam-policy-binding my-agent \
-  --region=us-central1 \
+  --region=europe-west2 \
   --member="serviceAccount:${SA_EMAIL}" \
   --role=roles/run.invoker
 
 # Create the scheduler job
 gcloud scheduler jobs create http poll-my-agent \
-  --location=us-central1 \
+  --location=europe-west2 \
   --schedule="* * * * *" \
   --uri="${SERVICE_URL}/foundry/poll" \
   --http-method=POST \
@@ -226,8 +226,8 @@ curl -X POST -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   https://my-agent-xxx.run.app/foundry/poll
 
 # Pause/resume scheduler
-gcloud scheduler jobs pause poll-my-agent --location=us-central1
-gcloud scheduler jobs resume poll-my-agent --location=us-central1
+gcloud scheduler jobs pause poll-my-agent --location=europe-west2
+gcloud scheduler jobs resume poll-my-agent --location=europe-west2
 ```
 
 ## Retirement Cleanup

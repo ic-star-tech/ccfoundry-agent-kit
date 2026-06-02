@@ -19,7 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ccfoundry_agent_kit import AgentClient, ChatRequest, ContextMode
-from agent_dev_board_api.cloud_run import CloudRunManager
+from agent_dev_board_api.cloud_run import DEFAULT_CLOUD_RUN_REGION, CloudRunManager
 from agent_dev_board_api.local_agents import LocalAgentManager
 from agent_dev_board_api.skill_store import SkillStore
 
@@ -166,7 +166,7 @@ class LocalAgentCreateRequest(BaseModel):
 class CloudRunDeployRequest(BaseModel):
     agent_name: str
     project: str = ""
-    region: str = "us-central1"
+    region: str = DEFAULT_CLOUD_RUN_REGION
     foundry_url: str = ""
     min_instances: int = 0
     memory: str = "512Mi"

@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_CLOUD_RUN_REGION = "europe-west2"
+
+
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -214,7 +217,7 @@ class CloudRunManager:
             },
             "defaults": {
                 "project": project or "",
-                "region": region or "us-central1",
+                "region": region or DEFAULT_CLOUD_RUN_REGION,
                 "artifact_repo": "ccfoundry-agents",
             },
             "commands": {
@@ -326,7 +329,7 @@ class CloudRunManager:
             str(region or "").strip()
             or str(status_gcloud.get("region") or "").strip()
             or str(defaults.get("region") or "").strip()
-            or "us-central1"
+            or DEFAULT_CLOUD_RUN_REGION
         )
         errors: list[str] = []
         services: list[dict[str, Any]] = []
@@ -540,7 +543,7 @@ class CloudRunManager:
             ).strip()
         if not clean_project:
             raise ValueError("GCP project is required. Set a gcloud project or pass project.")
-        clean_region = str(region or "").strip() or "us-central1"
+        clean_region = str(region or "").strip() or DEFAULT_CLOUD_RUN_REGION
         clean_memory = str(memory or "").strip() or "512Mi"
         clean_cpu = str(cpu or "").strip() or "1"
         clean_schedule = str(poll_schedule or "").strip() or "* * * * *"
