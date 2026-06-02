@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -466,6 +467,8 @@ async def _agent_bootstrap_state(agent: LiteAgentConfig) -> dict[str, Any]:
 
 
 async def _metadata_identity_token(audience: str) -> str:
+    if _env_truthy("CCFOUNDRY_DEV_BOARD_DISABLE_GCE_METADATA_AUTH"):
+        return ""
     normalized_audience = str(audience or "").strip().rstrip("/")
     if not normalized_audience:
         return ""
@@ -483,6 +486,56 @@ async def _metadata_identity_token(audience: str) -> str:
     return ""
 
 
+async def _gcloud_identity_token(audience: str) -> str:
+    normalized_audience = str(audience or "").strip().rstrip("/")
+    if not normalized_audience:
+        return ""
+
+    def _gcloud_token() -> str:
+        for command in (
+            ["gcloud", "auth", "print-identity-token", f"--audiences={normalized_audience}"],
+            ["gcloud", "auth", "print-identity-token"],
+        ):
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=str(REPO_ROOT),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                )
+            except Exception:
+                continue
+            token = completed.stdout.strip()
+            if token:
+                return token
+        return ""
+
+    return await asyncio.to_thread(_gcloud_token)
+
+
+async def _cloud_run_request(method: str, url: str, *, audience: str, timeout: float) -> httpx.Response:
+    metadata_token = await _metadata_identity_token(audience)
+    gcloud_token = await _gcloud_identity_token(audience)
+    attempts: list[tuple[str, str]] = [("none", "")]
+    if metadata_token:
+        attempts.append(("metadata", metadata_token))
+    if gcloud_token and gcloud_token != metadata_token:
+        attempts.append(("gcloud", gcloud_token))
+
+    last_response: httpx.Response | None = None
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        for token_source, token in attempts:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            response = await client.request(method, url, headers=headers)
+            response.extensions["ccfoundry_token_source"] = token_source
+            if response.is_success or response.status_code not in {401, 403}:
+                return response
+            last_response = response
+    return last_response or response
+
+
 async def _agent_cloud_run_bootstrap_state(agent_name: str, source_state: dict[str, Any]) -> dict[str, Any]:
     try:
         deployments = CLOUD_RUN_MANAGER.list_deployments(limit=50)
@@ -498,11 +551,13 @@ async def _agent_cloud_run_bootstrap_state(agent_name: str, source_state: dict[s
         service_url = str((result or {}).get("service_url") or "").strip().rstrip("/")
         if not service_url:
             continue
-        token = await _metadata_identity_token(service_url)
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
         try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                response = await client.get(f"{service_url}/foundry/bootstrap/state", headers=headers)
+            response = await _cloud_run_request(
+                "GET",
+                f"{service_url}/foundry/bootstrap/state",
+                audience=service_url,
+                timeout=10.0,
+            )
         except Exception as exc:
             logger.info("Cloud Run bootstrap state probe failed for %s: %s", service_url, exc)
             continue
@@ -533,6 +588,180 @@ async def _agent_cloud_run_bootstrap_state(agent_name: str, source_state: dict[s
                 logger.info("Failed to cache Cloud Run bootstrap state at %s: %s", source_path, exc)
         return merged
     return {}
+
+
+def _latest_cloud_run_deployment(agent_name: str) -> dict[str, Any]:
+    normalized_agent_name = str(agent_name or "").strip()
+    if not normalized_agent_name:
+        return {}
+    try:
+        deployments = CLOUD_RUN_MANAGER.list_deployments(limit=50)
+    except Exception:
+        return {}
+    for deployment in deployments:
+        if str(deployment.get("agent_name") or "").strip() != normalized_agent_name:
+            continue
+        if bool(deployment.get("dry_run")):
+            continue
+        result = deployment.get("result") if isinstance(deployment.get("result"), dict) else {}
+        if str((result or {}).get("service_url") or "").strip():
+            return deployment
+    return {}
+
+
+def _cloud_run_env_arg(env_vars: dict[str, str]) -> str:
+    entries = [f"{key}={value}" for key, value in env_vars.items() if str(value or "").strip()]
+    for delimiter in ("|", "~", "%", ";", "#"):
+        if all(delimiter not in entry for entry in entries):
+            return f"^{delimiter}^" + delimiter.join(entries)
+    raise ValueError("Cloud Run environment values contain every supported gcloud delimiter")
+
+
+async def _apply_developer_claim_to_cloud_run(
+    agent_name: str,
+    foundry_url: str,
+    apply_payload: dict[str, Any],
+) -> dict[str, Any]:
+    deployment = _latest_cloud_run_deployment(agent_name)
+    if not deployment:
+        return {
+            "ok": False,
+            "status": "not_deployed",
+            "message": "No existing Cloud Run deployment found; the claim will be carried by the next deploy.",
+        }
+
+    result = deployment.get("result") if isinstance(deployment.get("result"), dict) else {}
+    service_url = str((result or {}).get("service_url") or "").strip().rstrip("/")
+    service_name = str(deployment.get("service_name") or "").strip()
+    project = str(deployment.get("project") or "").strip()
+    region = str(deployment.get("region") or "").strip()
+    if not service_url or not service_name or not project or not region:
+        return {
+            "ok": False,
+            "status": "incomplete_deployment",
+            "message": "Cloud Run deployment metadata is incomplete; redeploy after the claim is installed.",
+        }
+
+    developer_identity = apply_payload.get("developer_identity")
+    env_vars = {
+        "FOUNDRY_DISCOVERY_ENABLE": "true",
+        "FOUNDRY_BASE_URL": foundry_url,
+        "FOUNDRY_AGENT_PUBLIC_URL": service_url,
+        "FOUNDRY_BOOTSTRAP_DELIVERY": str(apply_payload.get("bootstrap_delivery") or "poll"),
+        "FOUNDRY_DISCOVERY_CLAIM_TOKEN": str(apply_payload.get("discovery_claim_token") or ""),
+    }
+    if isinstance(developer_identity, dict) and developer_identity:
+        env_vars["FOUNDRY_DEVELOPER_IDENTITY_JSON"] = json.dumps(
+            developer_identity,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    try:
+        env_arg = _cloud_run_env_arg(env_vars)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "status": "invalid_env",
+            "message": str(exc),
+            "service_name": service_name,
+            "project": project,
+            "region": region,
+            "service_url": service_url,
+        }
+
+    command = [
+        "gcloud",
+        "run",
+        "services",
+        "update",
+        service_name,
+        "--project",
+        project,
+        "--region",
+        region,
+        f"--update-env-vars={env_arg}",
+        "--quiet",
+    ]
+    try:
+        completed = await asyncio.to_thread(
+            subprocess.run,
+            command,
+            cwd=str(REPO_ROOT),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "update_failed",
+            "message": str(exc),
+            "service_name": service_name,
+            "project": project,
+            "region": region,
+            "service_url": service_url,
+        }
+
+    if completed.returncode != 0:
+        return {
+            "ok": False,
+            "status": "update_failed",
+            "return_code": completed.returncode,
+            "stderr": (completed.stderr or completed.stdout or "")[-1200:],
+            "service_name": service_name,
+            "project": project,
+            "region": region,
+            "service_url": service_url,
+        }
+
+    poll_result: dict[str, Any] = {}
+    try:
+        response = await _cloud_run_request(
+            "POST",
+            f"{service_url}/foundry/poll",
+            audience=service_url,
+            timeout=30.0,
+        )
+        poll_result = {
+            "ok": response.is_success,
+            "status_code": response.status_code,
+            "token_source": str(response.extensions.get("ccfoundry_token_source") or ""),
+        }
+    except Exception as exc:
+        poll_result = {"ok": False, "status": "poll_failed", "message": str(exc)}
+
+    source_state, _ = _read_agent_source_bootstrap_state(agent_name)
+    synced_state = await _agent_cloud_run_bootstrap_state(agent_name, source_state)
+    return {
+        "ok": True,
+        "status": "updated",
+        "service_name": service_name,
+        "project": project,
+        "region": region,
+        "service_url": service_url,
+        "poll": poll_result,
+        "synced": bool(synced_state),
+        "registration_status": str(synced_state.get("registration_status") or ""),
+        "registered_agent_name": str(synced_state.get("registered_agent_name") or ""),
+    }
+
+
+def _log_cloud_run_claim_apply_result(task: asyncio.Task[dict[str, Any]]) -> None:
+    try:
+        result = task.result()
+    except Exception:
+        logger.exception("Cloud Run claim apply task failed")
+        return
+    if not bool(result.get("ok")):
+        logger.warning("Cloud Run claim apply did not complete: %s", result)
+        return
+    logger.info(
+        "Cloud Run claim apply completed for %s (%s)",
+        result.get("service_name") or result.get("service_url") or "unknown service",
+        result.get("registration_status") or result.get("status") or "updated",
+    )
 
 
 def _agent_source_item(agent_name: str) -> dict[str, Any]:
@@ -1703,6 +1932,7 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
     claim_token = str(ticket_response.get("discovery_claim_token") or ticket_response.get("claim_token") or "").strip()
     apply_result: dict[str, Any] | None = None
     apply_mode = ""
+    cloud_run_apply_result: dict[str, Any] = {}
     if claim_token:
         ticket_developer_identity = ticket_response.get("developer_identity")
         if not isinstance(ticket_developer_identity, dict):
@@ -1729,6 +1959,28 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
             except Exception as exc:
                 logger.warning("Developer claim source install failed for %s", agent.name, exc_info=exc)
                 raise HTTPException(status_code=502, detail="Failed to install discovery claim on agent source") from exc
+            if runtime_target == "cloud_run":
+                if _latest_cloud_run_deployment(agent.name):
+                    task = asyncio.create_task(
+                        _apply_developer_claim_to_cloud_run(
+                            agent.name,
+                            normalized_foundry_url,
+                            apply_payload,
+                        )
+                    )
+                    task.add_done_callback(_log_cloud_run_claim_apply_result)
+                    cloud_run_apply_result = {
+                        "ok": True,
+                        "status": "scheduled",
+                        "message": "Existing Cloud Run deployment will receive the claim in the background.",
+                    }
+                    apply_mode = "source_state+cloud_run_pending"
+                else:
+                    cloud_run_apply_result = {
+                        "ok": False,
+                        "status": "not_deployed",
+                        "message": "No existing Cloud Run deployment found; the claim will be carried by the next deploy.",
+                    }
         else:
             runtime_apply_failed = False
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
@@ -1785,6 +2037,7 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
         "claim_applied": bool(apply_result),
         "apply_mode": apply_mode,
         "apply_result": apply_result,
+        "cloud_run_apply": cloud_run_apply_result,
         "env_snippet": "\n".join(env_lines),
     }
 

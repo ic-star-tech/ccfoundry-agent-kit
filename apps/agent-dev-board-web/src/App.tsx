@@ -102,6 +102,7 @@ type DeveloperTicketResult = {
   claim_applied?: boolean;
   apply_mode?: string;
   apply_result?: Record<string, unknown> | null;
+  cloud_run_apply?: Record<string, unknown>;
   env_snippet?: string;
   message?: string;
 };
@@ -2775,9 +2776,11 @@ export default function App() {
       if (notificationEmail.trim() || !notificationEnabled) {
         await syncNotificationPreferences({ silent: true });
       }
-      await Promise.all([
+      void Promise.allSettled([
         probeHandshake(selectedAgent, foundryUrl),
         refreshDeveloperContext(foundryUrl),
+        refreshCloudRunDeployments(),
+        refreshCloudRunRuntimes(),
       ]);
       return true;
     } catch (err) {
@@ -3437,14 +3440,20 @@ export default function App() {
                   <div>
                     <h4>Install Foundry source claim</h4>
                     <p className="muted">
-                      This requests a bootstrap ticket and installs the discovery claim on the selected source before runtime
-                      launch. Local debug applies it immediately; Cloud Run carries it into the worker and uses it on the first poll.
+                      This requests a bootstrap ticket and installs the discovery claim on the selected source. Local debug applies
+                      it immediately; Cloud Run either carries it on deploy or receives it on the existing worker.
                     </p>
                   </div>
                 </div>
                 {claimInstalled ? (
                   <div className="reply">
-                    <strong>{developerTicket?.apply_mode === "source_state" ? "Claim installed on source" : "Claim installed"}</strong>
+                    <strong>
+                      {developerTicket?.apply_mode === "source_state+cloud_run_pending"
+                        ? "Claim installed; Cloud Run update started"
+                        : developerTicket?.apply_mode === "source_state"
+                          ? "Claim installed on source"
+                          : "Claim installed"}
+                    </strong>
                     <p>Last claim time: {textValue(bootstrapState.last_claimed_at, "recorded by the agent")}</p>
                   </div>
                 ) : null}
