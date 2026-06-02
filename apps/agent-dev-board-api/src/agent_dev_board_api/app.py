@@ -225,6 +225,11 @@ def _agent_config_from_local_registry(agent_name: str) -> LiteAgentConfig | None
     return LiteAgentConfig.model_validate({"name": name, "label": label, "base_url": base_url})
 
 
+def _agent_config_from_runtime_or_source(agent_name: str) -> LiteAgentConfig | None:
+    agents = _load_agents()
+    return agents.get(agent_name) or _agent_config_from_local_registry(agent_name)
+
+
 def _render_context(history: list[dict[str, str]]) -> str:
     lines: list[str] = []
     for item in history[-20:]:
@@ -1406,8 +1411,7 @@ async def list_local_agents(include_retired: bool = False) -> list[LocalAgentRun
 
 @app.get("/api/local-agents/{agent_name}/notification-preferences")
 async def get_local_agent_notification_preferences(agent_name: str) -> dict[str, Any]:
-    agents = _load_agents()
-    if agent_name not in agents:
+    if not _agent_config_from_runtime_or_source(agent_name):
         raise HTTPException(status_code=404, detail="Agent not found")
     return _read_agent_notification_preferences(agent_name)
 
@@ -1846,8 +1850,7 @@ async def developer_context(request: DeveloperContextRequest) -> dict[str, Any]:
 async def sync_developer_notification_preferences(
     request: DeveloperNotificationPreferencesSyncRequest,
 ) -> dict[str, Any]:
-    agents = _load_agents()
-    agent = agents.get(request.agent_name)
+    agent = _agent_config_from_runtime_or_source(request.agent_name)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
