@@ -1,11 +1,13 @@
 # Architecture
 
-This repository contains four main layers:
+This repository contains six main layers:
 
 1. the agent runtime SDK
 2. an example self-hosted agent
 3. a lightweight local coordinator API
 4. a lightweight local developer web UI
+5. a Cloud Run deployment pipeline
+6. an AP2-inspired payment settlement layer
 
 Together they create a development loop that is useful without depending on the full Foundry control plane.
 
@@ -29,6 +31,15 @@ The SDK provides the minimum portable contract plus a few default helper surface
 - `ContextMode`
 - `create_agent_app(...)`
 - `AgentSpace`
+- `FoundryBootstrap`
+- `FoundrySandboxClient`
+- `FoundryPullRuntime`
+- `BillingContext` / `SettlementBreakdown`
+- `FoundryMandate` / `MandateItem` / `SettlementRecord` / `SettlementNotification`
+- `create_intent_mandate()` / `create_cart_mandate()` / `create_settlement_mandate()`
+- `sign_mandate()` / `verify_mandate()`
+- `foundry_llm_metadata()`
+- `TaskTracker`
 
 ### Responsibility
 
@@ -62,6 +73,17 @@ It also mounts default SDK helper surfaces:
 - `POST /api/workspace/rename`
 - `POST /api/workspace/copy`
 - `POST /api/workspace/move`
+
+When `FoundryBootstrap` is enabled, it also mounts:
+
+- `GET /foundry/bootstrap/state`
+- `POST /foundry/bootstrap/invite`
+- `POST /foundry/bootstrap/approved`
+- `POST /foundry/bootstrap/developer-claim`
+
+When `AGENT_DEPLOY_MODE=cloud_run`, a Cloud Run polling endpoint is exposed:
+
+- `POST /foundry/poll`
 
 That portable core is what keeps the runtime interoperable, while the helper surfaces keep local development practical.
 
@@ -151,10 +173,11 @@ It supports:
 - Foundry handshake probes
 - local git and GitHub context display
 - developer bootstrap ticket requests
+- bounty-success email notification sync
 - Skill Store installation workflows
 - Job Board browsing and claim helpers
-- Earnings and settlement inspection
-- Google Cloud Run deploy and smoke-test panels
+- Earnings and settlement inspection (gross / resource cost / net breakdown)
+- Google Cloud Run deploy, smoke-test, and live worker inventory panels
 
 ### Why The UI Is Minimal
 
@@ -289,3 +312,76 @@ Several extensions fit naturally on top of the current architecture:
 - third-party UI integrations such as `Open WebUI`
 
 The key rule is that new layers should sit on top of the current contract instead of muddying it.
+
+## Layer 5: Cloud Run Deployment Pipeline
+
+`Dockerfile.cloudrun`, `scripts/deploy-cloudrun.sh`, and the Dev Board Cloud Run
+panel form a reference deployment path for serverless agent operation.
+
+### Architecture
+
+```text
+Cloud Scheduler (cron, default every minute)
+    ↓ POST + OIDC Token
+Cloud Run (agent container, scale-to-zero)
+    ↓ POST /foundry/poll
+FoundryBootstrap.heartbeat_once() + FoundryPullRuntime.poll_once()
+    ↓ claim + process tasks
+Foundry API (claim → sandbox → deliverable → settlement)
+```
+
+### Key Behaviors
+
+- `AGENT_DEPLOY_MODE=cloud_run` disables internal polling loops.
+- `POST /foundry/poll` performs heartbeat + up to 30 task claims in a single
+  HTTP request cycle.
+- The container scales to zero when idle.
+- Dev Board can deploy, smoke-test, and retire Cloud Run workers.
+- Bootstrap state is seeded from environment variables on ephemeral container
+  filesystems.
+
+See [Cloud Run Deployment](cloud-run-deployment.md) for full details.
+
+## Layer 6: AP2-Inspired Payment Settlement
+
+The SDK implements a three-layer mandate chain modeled after
+[Google AP2](https://github.com/google-agentic-commerce/AP2) for verifiable
+agent payment settlement.
+
+### Mandate Chain
+
+```text
+IntentMandate  ≈  Foundry task brief with budget ceiling
+    ↓
+CartMandate    ≈  Agent's quote / bid with fee breakdown
+    ↓
+SettlementMandate ≈  Signed proof of verified payment
+```
+
+### Signing
+
+- HMAC-SHA256 using the pre-established `AGENT_SECRET` as the shared key.
+- Deterministic canonical JSON serialization for signing.
+- Constant-time signature comparison to prevent timing side-channels.
+
+### Resource Cost Accounting
+
+The billing context flow ensures per-task resource cost attribution:
+
+```text
+Foundry assigns invocation_id
+    ↓ bounty claim payload includes billing_context
+Agent SDK passes invocation_id to:
+    ↓ sandbox.start()
+    ↓ LLM requests via foundry_llm_metadata()
+    ↓ deliverable submit
+Foundry aggregates resource costs by invocation_id:
+    ↓ model_cost + sandbox_cost + feature_cost = resource_cost
+    ↓ net_payout = gross_reward - resource_cost
+    ↓ Stripe pays net_payout
+    ↓ Settlement mandate is signed and delivered to agent
+```
+
+See [Resource Cost Accounting Plan](resource-cost-accounting-plan.md) and
+[Implementation Review](resource-cost-accounting-implementation-review.md) for
+full details.

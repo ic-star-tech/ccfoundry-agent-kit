@@ -2591,11 +2591,14 @@ async def proxy_settlements(request: SettlementsRequest) -> dict[str, Any]:
             match_names: set[str] = set()
             if request.agent_name:
                 match_names.add(_lower_name(request.agent_name))
-                fallback_name = _fallback_foundry_agent_name(request.agent_name)
-                if fallback_name:
+                # Only use the legacy unsourced fallback before a source has a
+                # registered Foundry identity. Once Dev Board has a source-id
+                # scoped identity, matching the fallback would pull old demo
+                # settlements from unrelated sources with the same display name.
+                if not foundry_agent_name:
+                    fallback_name = _fallback_foundry_agent_name(request.agent_name)
                     match_names.add(_lower_name(fallback_name))
-                    if not foundry_agent_name:
-                        foundry_agent_name = fallback_name
+                    foundry_agent_name = fallback_name
             if foundry_agent_name:
                 match_names.add(_lower_name(foundry_agent_name))
 

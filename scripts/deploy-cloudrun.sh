@@ -80,9 +80,25 @@ if [[ -z "$GCP_PROJECT" ]]; then
 fi
 
 IMAGE_TAG="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/${SERVICE_NAME}:latest"
+AR_HOST="${GCP_REGION}-docker.pkg.dev"
 SCHEDULER_JOB="poll-${SERVICE_NAME}"
 
 log() { echo "[deploy] $*"; }
+elapsed_seconds() {
+    local start="$1"
+    local end
+    end="$(date +%s)"
+    echo "$((end - start))s"
+}
+metadata_project_number() {
+    if command -v curl &>/dev/null; then
+        curl -fsS \
+            --connect-timeout 1 \
+            --max-time 2 \
+            -H "Metadata-Flavor: Google" \
+            "http://metadata.google.internal/computeMetadata/v1/project/numeric-project-id" 2>/dev/null || true
+    fi
+}
 run() {
     if $DRY_RUN; then
         echo "[dry-run] $*"
@@ -104,6 +120,7 @@ if ! command -v gcloud &>/dev/null; then
 fi
 
 log "Ensuring Artifact Registry repository exists..."
+STEP_START="$(date +%s)"
 if $DRY_RUN; then
     echo "[dry-run] gcloud artifacts repositories describe $AR_REPO --project=$GCP_PROJECT --location=$GCP_REGION"
     echo "[dry-run] gcloud artifacts repositories create $AR_REPO --repository-format=docker --location=$GCP_REGION --project=$GCP_PROJECT --description=CCFoundry agent Cloud Run images --quiet"
@@ -128,12 +145,14 @@ else
         exit 1
     fi
 fi
+log "Artifact Registry check completed in $(elapsed_seconds "$STEP_START")"
 
 # ── Step 1: Prepare build context ─────────────────────────────────────────────
 BUILD_DIR=$(mktemp -d "${REPO_ROOT}/.cloudrun-build-XXXXXX")
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
 log "Preparing build context in $BUILD_DIR"
+STEP_START="$(date +%s)"
 
 # Copy essential dirs
 cp -r "$REPO_ROOT/packages" "$BUILD_DIR/packages"
@@ -160,19 +179,33 @@ cat > "$BUILD_DIR/.dockerignore" <<'EOF'
 **/*.egg-info
 **/build
 EOF
+log "Build context prepared in $(elapsed_seconds "$STEP_START")"
 
 # ── Step 2: Build & push Docker image ─────────────────────────────────────
 log "Configuring Docker for Artifact Registry..."
-run gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+STEP_START="$(date +%s)"
+if $DRY_RUN; then
+    echo "[dry-run] gcloud auth configure-docker $AR_HOST --quiet"
+elif [[ -f "${HOME}/.docker/config.json" ]] && grep -q "\"${AR_HOST}\"" "${HOME}/.docker/config.json"; then
+    log "Docker credential helper already configured for $AR_HOST"
+else
+    gcloud auth configure-docker "$AR_HOST" --quiet
+fi
+log "Docker auth configuration completed in $(elapsed_seconds "$STEP_START")"
 
-log "Building Docker image locally..."
-run docker build -f "$BUILD_DIR/Dockerfile" -t "$IMAGE_TAG" "$BUILD_DIR"
+log "Building Docker image locally with BuildKit cache..."
+STEP_START="$(date +%s)"
+run env DOCKER_BUILDKIT=1 docker build --progress=plain -f "$BUILD_DIR/Dockerfile" -t "$IMAGE_TAG" "$BUILD_DIR"
+log "Docker build completed in $(elapsed_seconds "$STEP_START")"
 
 log "Pushing image to Artifact Registry..."
+STEP_START="$(date +%s)"
 run docker push "$IMAGE_TAG"
+log "Docker push completed in $(elapsed_seconds "$STEP_START")"
 
 # ── Step 3: Deploy to Cloud Run ───────────────────────────────────────────────
 log "Deploying to Cloud Run..."
+STEP_START="$(date +%s)"
 
 DEPLOY_ARGS=(
     --project="$GCP_PROJECT"
@@ -232,6 +265,7 @@ if [[ -n "$FOUNDRY_URL" ]]; then
 fi
 
 run gcloud run deploy "$SERVICE_NAME" "${DEPLOY_ARGS[@]}" --quiet
+log "Cloud Run deploy completed in $(elapsed_seconds "$STEP_START")"
 
 # ── Step 4: Get the service URL ───────────────────────────────────────────────
 if ! $DRY_RUN; then
@@ -249,40 +283,66 @@ fi
 # ── Step 5: Create Cloud Scheduler job ────────────────────────────────────────
 if ! $SKIP_SCHEDULER; then
     log "Creating Cloud Scheduler job: $SCHEDULER_JOB"
+    STEP_START="$(date +%s)"
 
     # Use the default Compute Engine service account for OIDC auth. It exists
     # on GCE-backed projects without requiring an App Engine appspot account.
     if $DRY_RUN; then
         PROJECT_NUMBER="<project-number>"
     else
-        PROJECT_NUMBER="$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')"
+        PROJECT_NUMBER="$(metadata_project_number)"
+        if [[ -z "$PROJECT_NUMBER" ]]; then
+            PROJECT_NUMBER="$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')"
+        fi
     fi
     SA_EMAIL="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-    run timeout 90s gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
-        --project="$GCP_PROJECT" \
-        --region="$GCP_REGION" \
-        --member="serviceAccount:${SA_EMAIL}" \
-        --role=roles/run.invoker \
-        --quiet
+    if $DRY_RUN; then
+        echo "[dry-run] gcloud run services get-iam-policy $SERVICE_NAME --project=$GCP_PROJECT --region=$GCP_REGION --flatten=bindings[].members --filter=bindings.role=roles/run.invoker AND bindings.members=serviceAccount:${SA_EMAIL} --format=value(bindings.members)"
+        echo "[dry-run] gcloud run services add-iam-policy-binding $SERVICE_NAME --project=$GCP_PROJECT --region=$GCP_REGION --member=serviceAccount:${SA_EMAIL} --role=roles/run.invoker --quiet"
+    elif INVOKER_MEMBER="$(
+        gcloud run services get-iam-policy "$SERVICE_NAME" \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --flatten="bindings[].members" \
+            --filter="bindings.role=roles/run.invoker AND bindings.members=serviceAccount:${SA_EMAIL}" \
+            --format="value(bindings.members)" 2>/dev/null
+    )" && [[ -n "$INVOKER_MEMBER" ]]; then
+        log "Scheduler service account already has Cloud Run invoker access"
+    else
+        timeout 90s gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --member="serviceAccount:${SA_EMAIL}" \
+            --role=roles/run.invoker \
+            --quiet
+    fi
 
-    # Delete existing job if present (ignore errors)
-    run timeout 45s gcloud scheduler jobs delete "$SCHEDULER_JOB" \
-        --project="$GCP_PROJECT" \
-        --location="$GCP_REGION" \
-        --quiet 2>/dev/null || true
-
-    run timeout 90s gcloud scheduler jobs create http "$SCHEDULER_JOB" \
-        --project="$GCP_PROJECT" \
-        --location="$GCP_REGION" \
-        --schedule="$POLL_SCHEDULE" \
-        --uri="${SERVICE_URL}/foundry/poll" \
-        --http-method=POST \
-        --oidc-service-account-email="$SA_EMAIL" \
-        --oidc-token-audience="$SERVICE_URL" \
-        --attempt-deadline=120s \
+    SCHEDULER_ARGS=(
+        --project="$GCP_PROJECT"
+        --location="$GCP_REGION"
+        --schedule="$POLL_SCHEDULE"
+        --uri="${SERVICE_URL}/foundry/poll"
+        --http-method=POST
+        --oidc-service-account-email="$SA_EMAIL"
+        --oidc-token-audience="$SERVICE_URL"
+        --attempt-deadline=120s
         --quiet
-    log "Scheduler job created: schedule ${POLL_SCHEDULE}"
+    )
+    if $DRY_RUN; then
+        echo "[dry-run] gcloud scheduler jobs describe $SCHEDULER_JOB --project=$GCP_PROJECT --location=$GCP_REGION"
+        echo "[dry-run] gcloud scheduler jobs update http $SCHEDULER_JOB ${SCHEDULER_ARGS[*]}"
+        echo "[dry-run] gcloud scheduler jobs create http $SCHEDULER_JOB ${SCHEDULER_ARGS[*]}"
+    elif gcloud scheduler jobs describe "$SCHEDULER_JOB" \
+        --project="$GCP_PROJECT" \
+        --location="$GCP_REGION" >/dev/null 2>&1; then
+        timeout 90s gcloud scheduler jobs update http "$SCHEDULER_JOB" "${SCHEDULER_ARGS[@]}"
+        log "Scheduler job updated: schedule ${POLL_SCHEDULE}"
+    else
+        timeout 90s gcloud scheduler jobs create http "$SCHEDULER_JOB" "${SCHEDULER_ARGS[@]}"
+        log "Scheduler job created: schedule ${POLL_SCHEDULE}"
+    fi
+    log "Scheduler setup completed in $(elapsed_seconds "$STEP_START")"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────

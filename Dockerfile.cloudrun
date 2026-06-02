@@ -3,13 +3,17 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# Copy the SDK and me_agent source
-COPY packages/python-sdk /build/packages/python-sdk
-COPY examples/me_agent /build/examples/me_agent
+# Copy only package metadata and source needed for installation. Keep
+# agent_space out of this stage so prompt/config changes do not invalidate pip.
+COPY packages/python-sdk/pyproject.toml packages/python-sdk/README.md /build/packages/python-sdk/
+COPY packages/python-sdk/src /build/packages/python-sdk/src
+COPY examples/me_agent/pyproject.toml examples/me_agent/README.md /build/examples/me_agent/
+COPY examples/me_agent/src /build/examples/me_agent/src
 
 # Install both together so pip resolves the local ccfoundry-agent-kit dependency
 # uvicorn is added explicitly as it's the ASGI server (not in SDK deps)
-RUN pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
     /build/packages/python-sdk \
     /build/examples/me_agent \
     "uvicorn[standard]>=0.30,<1.0"

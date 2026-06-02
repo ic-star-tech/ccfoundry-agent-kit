@@ -51,6 +51,51 @@ By separating the standard A2A card from the Foundry-specific metadata, other sy
 
 ---
 
+## AP2 — Agent Payments Protocol
+
+### What It Is
+
+[AP2](https://github.com/google-agentic-commerce/AP2) is an open protocol from Google for agent-to-agent and agent-to-service payments. It defines a three-layer mandate chain that separates spending intent, price agreement, and payment authorization into independently verifiable steps.
+
+### How We Use It
+
+The SDK implements a simplified version of the AP2 mandate chain adapted to the Foundry agent labor market:
+
+| AP2 Concept | Foundry Equivalent | SDK Type |
+|-------------|-------------------|----------|
+| User Intent | Task brief + budget ceiling | `IntentMandate` |
+| Cart / Price Lock | Agent's quote / bid | `CartMandate` |
+| Payment Mandate | Signed settlement proof | `SettlementMandate` |
+
+Each mandate is a JSON document signed with HMAC-SHA256 using the pre-established `AGENT_SECRET` as the shared key.
+
+```python
+from ccfoundry_agent_kit import create_settlement_mandate, verify_mandate
+
+mandate = create_settlement_mandate(
+    task_ref="bounty-abc123",
+    agent_name="verilog-writer",
+    amount=4.95,
+    items=[
+        {"label": "task_reward", "amount": 5.0, "currency": "USD"},
+        {"label": "sandbox_cost", "amount": -0.05, "currency": "USD"},
+    ],
+    secret=agent_secret,
+)
+
+# Verify on receipt
+assert verify_mandate(mandate, mandate["signature"], agent_secret)
+```
+
+### Key Design Choices
+
+- The symmetric HMAC model is appropriate because Foundry and the agent share a pre-established trust channel (`AGENT_SECRET`)
+- When third-party auditing is needed, the signing module can upgrade to asymmetric ECDSA/VDC without changing the mandate data structures
+- Settlement items follow AP2's `PaymentItem` pattern with signed line items for task reward, LLM cost, sandbox cost, and feature cost
+- The `FoundryBootstrap` handles incoming `task_settled` actions: it verifies the mandate signature and stores an audit trail in local state
+
+---
+
 ## MCP — Model Context Protocol
 
 ### What It Is
@@ -173,6 +218,11 @@ This gives callers real-time visibility into execution progress, not just the fi
 │   └─────────────────┘    └──────────────────────────┘  │
 │                                                         │
 │   ┌─────────────────────────────────────────────────┐  │
+│   │  AP2 Mandate Chain                              │  │
+│   │  (IntentMandate → CartMandate → Settlement)     │  │
+│   └─────────────────────────────────────────────────┘  │
+│                                                         │
+│   ┌─────────────────────────────────────────────────┐  │
 │   │  MCP Declarations / Config Hooks                │  │
 │   │  (manifest fields + mcp_servers.yaml)           │  │
 │   └─────────────────────────────────────────────────┘  │
@@ -187,8 +237,9 @@ This gives callers real-time visibility into execution progress, not just the fi
 The key insight is that these protocols handle different layers:
 
 - **A2A** handles agent identity and discovery
+- **AP2** handles payment mandates and settlement verification
 - **MCP** is represented today as manifest/config declarations for future tool integration
 - **OpenAI Completions** handles model access
 - **SSE** handles real-time streaming
 
-They compose naturally because they operate at different levels of the stack. In the current implementation, A2A, SSE, and OpenAI-compatible model calls are live runtime surfaces, while MCP remains a declaration-level boundary until runtime support lands.
+They compose naturally because they operate at different levels of the stack. In the current implementation, A2A, AP2, SSE, and OpenAI-compatible model calls are live runtime surfaces, while MCP remains a declaration-level boundary until runtime support lands.

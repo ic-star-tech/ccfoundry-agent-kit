@@ -154,6 +154,8 @@ class CloudRunManager:
         accounts: list[dict[str, Any]] = []
         project = ""
         region = ""
+        token_valid = False
+        auth_error = ""
         errors: list[str] = []
         disable_metadata_auth = _env_truthy("CCFOUNDRY_DEV_BOARD_DISABLE_GCE_METADATA_AUTH")
 
@@ -188,6 +190,15 @@ class CloudRunManager:
                 if metadata_account:
                     active_account = metadata_account
                     accounts = [{"account": metadata_account, "status": "ACTIVE", "source": "gce_metadata"}]
+            if active_account:
+                token_code, token_stdout, token_stderr = _run_command(
+                    ["gcloud", "auth", "print-access-token"],
+                    timeout=8,
+                )
+                token_valid = token_code == 0 and bool(token_stdout.strip())
+                if not token_valid:
+                    auth_error = token_stderr or token_stdout or "gcloud auth token is not usable"
+                    errors.append(f"gcloud authentication needs refresh: {auth_error}")
         else:
             errors.append("gcloud CLI is not installed or not on PATH")
 
@@ -199,7 +210,7 @@ class CloudRunManager:
             errors.append("docker is not installed or not on PATH")
 
         return {
-            "ok": bool(gcloud_path and docker_path and active_account),
+            "ok": bool(gcloud_path and docker_path and active_account and token_valid),
             "gcloud": {
                 "installed": bool(gcloud_path),
                 "path": gcloud_path or "",
@@ -208,7 +219,9 @@ class CloudRunManager:
                 "accounts": accounts,
                 "project": project,
                 "region": region,
-                "authenticated": bool(active_account),
+                "authenticated": bool(active_account and token_valid),
+                "token_valid": token_valid,
+                "auth_error": auth_error,
             },
             "docker": {
                 "installed": bool(docker_path),
