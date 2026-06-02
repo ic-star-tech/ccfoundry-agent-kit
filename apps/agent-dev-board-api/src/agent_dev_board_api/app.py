@@ -570,7 +570,7 @@ async def _agent_cloud_run_bootstrap_state(agent_name: str, source_state: dict[s
                 "GET",
                 f"{service_url}/foundry/bootstrap/state",
                 audience=service_url,
-                timeout=10.0,
+                timeout=4.0,
             )
         except Exception as exc:
             logger.info("Cloud Run bootstrap state probe failed for %s: %s", service_url, exc)
@@ -1537,7 +1537,7 @@ async def retire_local_agent(agent_name: str, request: RetireAgentRequest) -> di
 
 @app.get("/api/cloud-run/status")
 async def cloud_run_status() -> dict[str, Any]:
-    return CLOUD_RUN_MANAGER.status()
+    return await asyncio.to_thread(CLOUD_RUN_MANAGER.status)
 
 
 @app.post("/api/cloud-run/auth/start")
@@ -1581,7 +1581,7 @@ async def list_cloud_run_deployments(limit: int = 20) -> list[dict[str, Any]]:
 
 @app.get("/api/cloud-run/runtimes")
 async def list_cloud_run_runtimes(project: str = "", region: str = "") -> dict[str, Any]:
-    return CLOUD_RUN_MANAGER.list_live_runtimes(project=project, region=region)
+    return await asyncio.to_thread(CLOUD_RUN_MANAGER.list_live_runtimes, project=project, region=region)
 
 
 @app.get("/api/cloud-run/deployments/{job_id}")
@@ -1777,20 +1777,6 @@ async def probe_handshake(request: LiteHandshakeProbeRequest) -> dict[str, Any]:
         foundry_routes: dict[str, Any] = {}
         if normalized_foundry_url:
             foundry_health_payload, foundry_health_probe = await _probe_json(client, f"{normalized_foundry_url}/health")
-            foundry_routes = {
-                "discover": await _probe_route(
-                    client,
-                    f"{normalized_foundry_url}/api/registry/discover",
-                    method="POST",
-                    json_body={},
-                ),
-                "register": await _probe_route(
-                    client,
-                    f"{normalized_foundry_url}/api/registry/register",
-                    method="POST",
-                    json_body={},
-                ),
-            }
 
     return {
         "agent": {

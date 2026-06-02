@@ -264,7 +264,7 @@ if ! $SKIP_SCHEDULER; then
     fi
     SA_EMAIL="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-    run gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
+    run timeout 90s gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
         --project="$GCP_PROJECT" \
         --region="$GCP_REGION" \
         --member="serviceAccount:${SA_EMAIL}" \
@@ -272,12 +272,12 @@ if ! $SKIP_SCHEDULER; then
         --quiet
 
     # Delete existing job if present (ignore errors)
-    run gcloud scheduler jobs delete "$SCHEDULER_JOB" \
+    run timeout 45s gcloud scheduler jobs delete "$SCHEDULER_JOB" \
         --project="$GCP_PROJECT" \
         --location="$GCP_REGION" \
         --quiet 2>/dev/null || true
 
-    run gcloud scheduler jobs create http "$SCHEDULER_JOB" \
+    run timeout 90s gcloud scheduler jobs create http "$SCHEDULER_JOB" \
         --project="$GCP_PROJECT" \
         --location="$GCP_REGION" \
         --schedule="$POLL_SCHEDULE" \

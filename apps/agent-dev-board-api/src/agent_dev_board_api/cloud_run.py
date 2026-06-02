@@ -858,6 +858,13 @@ class CloudRunManager:
             logs = list(job.get("logs") or [])
             logs.append(line.rstrip("\n"))
             job["logs"] = logs
+            service_url = self._extract_service_url(logs)
+            if service_url:
+                result = dict(job.get("result") or {})
+                result["service_url"] = service_url
+                result["health_url"] = f"{service_url.rstrip('/')}/health"
+                result["poll_url"] = f"{service_url.rstrip('/')}/foundry/poll"
+                job["result"] = result
         self._save_job(job)
 
     def _with_extracted_result(self, job: dict[str, Any]) -> dict[str, Any]:
