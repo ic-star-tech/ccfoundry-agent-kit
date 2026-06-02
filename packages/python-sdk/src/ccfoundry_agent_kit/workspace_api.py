@@ -30,10 +30,16 @@ def build_workspace_router(workspace_root: str | Path) -> APIRouter:
 
     def _safe_resolve(raw_path: str) -> Path:
         normalized = str(raw_path or "").strip().strip("/")
-        target = (root / normalized).resolve()
+        candidate = root / normalized
+        target = candidate.resolve()
         if target != root and root not in target.parents:
             raise HTTPException(status_code=400, detail="Path escapes workspace root")
         return target
+
+    def _reject_symlink(target: Path) -> None:
+        """Reject writes to symlinks that could escape workspace root."""
+        if target.is_symlink():
+            raise HTTPException(status_code=400, detail="Cannot write through symlink")
 
     def _relative_path(path: Path) -> str:
         if path == root:
@@ -83,6 +89,7 @@ def build_workspace_router(workspace_root: str | Path) -> APIRouter:
         target = _safe_resolve(payload.path)
         if target.exists() and target.is_dir():
             raise HTTPException(status_code=400, detail="Cannot overwrite a directory")
+        _reject_symlink(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(payload.content, encoding="utf-8")
         return {
@@ -110,12 +117,28 @@ def build_workspace_router(workspace_root: str | Path) -> APIRouter:
             or not Path(raw_path).suffix
         )
         target = base_target / safe_filename if treat_as_directory else base_target
-        # Re-validate final target after appending filename
-        if target != root and root not in target.parents:
+        # Resolve the final path to follow any symlinks, then re-validate
+        resolved_target = target.resolve(strict=False)
+        if resolved_target != root and root not in resolved_target.parents:
             raise HTTPException(status_code=400, detail="Path escapes workspace root")
+        # Reject if the target itself is a symlink pointing outside workspace
+        if target.is_symlink():
+            raise HTTPException(status_code=400, detail="Cannot write through symlink")
         target.parent.mkdir(parents=True, exist_ok=True)
         data = await file.read()
-        target.write_bytes(data)
+        # Use O_NOFOLLOW to prevent TOCTOU symlink race between check and write
+        import os as _os
+        open_flags = _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC | getattr(_os, "O_NOFOLLOW", 0)
+        try:
+            fd = _os.open(str(target), open_flags, 0o644)
+        except OSError as exc:
+            if exc.errno == 40:  # ELOOP — target is a symlink
+                raise HTTPException(status_code=400, detail="Cannot write through symlink") from exc
+            raise
+        try:
+            _os.write(fd, data)
+        finally:
+            _os.close(fd)
         return {
             "ok": True,
             "path": _relative_path(target),
