@@ -3471,7 +3471,7 @@ export default function App() {
                   <div>
                     <h4>Install Foundry source claim</h4>
                     <p className="muted">
-                      This requests a bootstrap ticket and installs the discovery claim on the selected source. Local debug applies
+                      This requests a Foundry ticket and installs the discovery claim on the selected source. Local debug applies
                       it immediately; Cloud Run either carries it on deploy or receives it on the existing worker.
                     </p>
                   </div>
@@ -3518,7 +3518,7 @@ export default function App() {
                     onClick={requestBootstrapTicket}
                     disabled={ticketLoading || !selectedAgent || !developerSessionReady}
                   >
-                    {ticketLoading ? "Requesting..." : "Request bootstrap ticket"}
+                    {ticketLoading ? "Requesting ticket..." : "Request Foundry ticket"}
                   </button>
                   {guideRunTarget === "cloud_run" ? (
                     <button
@@ -3568,7 +3568,7 @@ export default function App() {
                   <div className="guide-blocker">
                     <strong>Cloud Run worker is not deployed yet</strong>
                     <p>
-                      The bootstrap ticket is installed on the source. Click <code>Deploy to Cloud Run</code> above; the worker
+                      The Foundry ticket installed a claim on the source. Click <code>Deploy to Cloud Run</code> above; the worker
                       will carry the claim and start discovery on its first poll.
                     </p>
                   </div>
@@ -3578,7 +3578,7 @@ export default function App() {
                     <strong>Name collision or retired identity</strong>
                     <p>
                       Foundry returned a retired registration state. The easiest recovery is to create a new local agent with
-                      a different name and request a fresh bootstrap ticket.
+                      a different name and request a fresh Foundry ticket.
                     </p>
                   </div>
                 ) : null}
