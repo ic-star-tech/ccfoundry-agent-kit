@@ -1777,6 +1777,8 @@ export default function App() {
   const cloudRunDeploymentStatus = textValue(displayedCloudRunDeployment?.status);
   const cloudRunDeploymentActive = ["queued", "running"].includes(cloudRunDeploymentStatus);
   const cloudRunDeploymentStarted = Boolean(displayedCloudRunDeployment && !displayedCloudRunDeployment.dry_run);
+  const cloudRunRuntimePresent = cloudRunDeploymentStarted || cloudRunDeploymentSucceeded || Boolean(selectedCloudRunLiveService);
+  const cloudRunClaimInstalledButRuntimeMissing = guideRunTarget === "cloud_run" && claimInstalled && !cloudRunRuntimePresent;
   const cloudRunClaimReady = claimInstalled || cloudRunDeploymentStarted;
   const cloudRunNeedsSourceClaim = !cloudRunClaimReady;
   const cloudRunCanInstallSourceClaim = cloudRunNeedsSourceClaim && developerSessionReady;
@@ -1935,6 +1937,35 @@ export default function App() {
   ]);
 
   const handshakeStages = useMemo(() => {
+    if (cloudRunClaimInstalledButRuntimeMissing) {
+      return [
+        {
+          label: "Discover",
+          status: "not started",
+          tone: "neutral" as const,
+          detail: "Cloud Run is not deployed yet. Deploy the worker so it can send the first discover call.",
+        },
+        {
+          label: "Invite",
+          status: "not started",
+          tone: "neutral" as const,
+          detail: "Foundry issues the invite after the worker discovers with this source claim.",
+        },
+        {
+          label: "Register",
+          status: "not started",
+          tone: "neutral" as const,
+          detail: "Registration starts after the Cloud Run worker receives and redeems the invite.",
+        },
+        {
+          label: "Approved",
+          status: "pending",
+          tone: "warn" as const,
+          detail: "Approval is pending until the Cloud Run worker completes discovery and registration.",
+        },
+      ];
+    }
+
     const discoveryStatus = textValue(bootstrapState.discovery_status, bootstrapEnabled ? "waiting" : "disabled");
     const inviteStatus = textValue(bootstrapState.invite_status, bootstrapEnabled ? "waiting" : "disabled");
     const registerStatus = textValue(bootstrapState.registration_status, bootstrapEnabled ? "waiting" : "disabled");
@@ -1967,7 +1998,7 @@ export default function App() {
         detail: approvedAt || "Approval callback has not been observed yet.",
       },
     ];
-  }, [bootstrapEnabled, bootstrapState]);
+  }, [bootstrapEnabled, bootstrapState, cloudRunClaimInstalledButRuntimeMissing]);
 
   async function sendMessage(overrideMessage = "") {
     const nextMessage = (overrideMessage || message).trim();
@@ -3514,9 +3545,11 @@ export default function App() {
                 <div className="step-header">
                   <span className="step-index">5</span>
                   <div>
-                    <h4>Wait for Foundry onboarding</h4>
+                    <h4>{cloudRunClaimInstalledButRuntimeMissing ? "Deploy Cloud Run to start onboarding" : "Wait for Foundry onboarding"}</h4>
                     <p className="muted">
-                      Dev Board now auto-refreshes the flow while claim-based onboarding is in progress.
+                      {cloudRunClaimInstalledButRuntimeMissing
+                        ? "The source claim is installed. Cloud Run onboarding starts after a worker is deployed and makes its first discover call."
+                        : "Dev Board now auto-refreshes the flow while claim-based onboarding is in progress."}
                     </p>
                   </div>
                 </div>
@@ -3531,6 +3564,15 @@ export default function App() {
                     </article>
                   ))}
                 </div>
+                {cloudRunClaimInstalledButRuntimeMissing ? (
+                  <div className="guide-blocker">
+                    <strong>Cloud Run worker is not deployed yet</strong>
+                    <p>
+                      The bootstrap ticket is installed on the source. Click <code>Deploy to Cloud Run</code> above; the worker
+                      will carry the claim and start discovery on its first poll.
+                    </p>
+                  </div>
+                ) : null}
                 {onboardingRetired ? (
                   <div className="error">
                     <strong>Name collision or retired identity</strong>
@@ -3554,6 +3596,11 @@ export default function App() {
                       The worker has credentials; Dev Board is still waiting for the live Cloud Run poll state to sync back.
                     </p>
                   </div>
+                ) : cloudRunClaimInstalledButRuntimeMissing ? (
+                  <p className="muted">
+                    Current discovery status: <strong>not started</strong>. Deploy a Cloud Run worker to begin discover, invite,
+                    register, and approval.
+                  </p>
                 ) : (
                   <p className="muted">
                     Current discovery status: <strong>{textValue(discoveryStatus, "n/a")}</strong>. If invite or register is
