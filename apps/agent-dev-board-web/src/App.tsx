@@ -2866,9 +2866,9 @@ export default function App() {
         <div className="workspace-toolbar">
           <button
             type="button"
-            className={`external-link-chip privacy-toggle ${showSensitiveInfo ? "active" : ""}`}
+            className={`external-link-chip privacy-toggle ${!showSensitiveInfo ? "active" : ""}`}
             onClick={() => setShowSensitiveInfo((current) => !current)}
-            aria-pressed={showSensitiveInfo}
+            aria-pressed={!showSensitiveInfo}
             aria-label={showSensitiveInfo ? "Hide sensitive information" : "Show sensitive information"}
             title={showSensitiveInfo ? "Hide sensitive information" : "Show sensitive information"}
           >
@@ -2882,7 +2882,7 @@ export default function App() {
                 d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"
               />
               <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
-              {showSensitiveInfo ? (
+              {!showSensitiveInfo ? (
                 <path
                   fill="none"
                   stroke="currentColor"
