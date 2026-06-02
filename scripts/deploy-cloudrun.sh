@@ -178,6 +178,18 @@ cat > "$BUILD_DIR/.dockerignore" <<'EOF'
 **/.dev-board
 **/*.egg-info
 **/build
+# Sensitive local agent state — must not be baked into images
+**/.env
+**/.env.*
+**/.foundry_bootstrap.json
+**/.foundry_bootstrap.*.json
+**/runtime/
+**/*.jsonl
+**/*.pem
+**/*.key
+**/*credentials*.json
+**/*client_secret*.json
+**/*service-account*.json
 EOF
 log "Build context prepared in $(elapsed_seconds "$STEP_START")"
 

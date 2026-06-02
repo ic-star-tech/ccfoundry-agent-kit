@@ -243,9 +243,13 @@ def create_agent_app(
         @app.websocket("/pty")
         async def pty_websocket(websocket: WebSocket) -> None:
             expected_secret = str((bootstrap_state.env_vars if bootstrap_state else {}).get("AGENT_SECRET") or "").strip()
+            if not expected_secret:
+                # Refuse PTY access entirely when no secret is configured
+                await websocket.close(code=1008)
+                return
             auth_header = str(websocket.headers.get("authorization") or "").strip()
             token = auth_header.split(" ", 1)[1].strip() if auth_header.lower().startswith("bearer ") else auth_header
-            if expected_secret and token != expected_secret:
+            if token != expected_secret:
                 await websocket.close(code=1008)
                 return
 

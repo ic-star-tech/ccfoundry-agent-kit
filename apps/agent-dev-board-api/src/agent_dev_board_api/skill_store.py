@@ -482,12 +482,20 @@ class SkillStore:
 
     def uninstall_skill(self, agent_instance_dir: Path, skill_id: str) -> dict[str, Any]:
         """Remove a skill from an agent."""
+        import re as _re
+        # Validate skill_id to prevent path traversal (e.g. "..", "../../etc")
+        sanitized_id = str(skill_id or "").strip()
+        if not sanitized_id or not _re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_\-]*", sanitized_id):
+            raise ValueError(f"Invalid skill id '{skill_id}'")
         skills_dir = agent_instance_dir / "agent_space" / "skills"
-        skill_dir = skills_dir / skill_id
+        skill_dir = (skills_dir / sanitized_id).resolve()
+        # Confirm the resolved path is actually inside skills_dir
+        if not skill_dir.is_relative_to(skills_dir.resolve()):
+            raise ValueError(f"Skill id '{skill_id}' resolves outside skills directory")
         if not skill_dir.exists():
             raise ValueError(f"Skill '{skill_id}' is not installed")
         shutil.rmtree(skill_dir)
-        return {"ok": True, "skill_id": skill_id, "removed": True}
+        return {"ok": True, "skill_id": sanitized_id, "removed": True}
 
     def _parse_skill_info(self, skill_ref: str, skill_md: Path) -> dict[str, Any]:
         """Parse basic info from a SKILL.md file."""

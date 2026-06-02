@@ -97,15 +97,22 @@ def build_workspace_router(workspace_root: str | Path) -> APIRouter:
         path: str = Form(""),
     ) -> dict[str, Any]:
         raw_path = str(path or "").strip()
-        filename = file.filename or "upload.bin"
-        base_target = _safe_resolve(raw_path or filename)
+        # Sanitize filename: strip directory components and reject traversal
+        raw_filename = str(file.filename or "upload.bin")
+        safe_filename = Path(raw_filename).name  # basename only — strips ../ etc.
+        if not safe_filename or safe_filename in {".", ".."}:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        base_target = _safe_resolve(raw_path or safe_filename)
         treat_as_directory = (
             not raw_path
             or raw_path.endswith("/")
             or (base_target.exists() and base_target.is_dir())
             or not Path(raw_path).suffix
         )
-        target = base_target / filename if treat_as_directory else base_target
+        target = base_target / safe_filename if treat_as_directory else base_target
+        # Re-validate final target after appending filename
+        if target != root and root not in target.parents:
+            raise HTTPException(status_code=400, detail="Path escapes workspace root")
         target.parent.mkdir(parents=True, exist_ok=True)
         data = await file.read()
         target.write_bytes(data)
@@ -113,7 +120,7 @@ def build_workspace_router(workspace_root: str | Path) -> APIRouter:
             "ok": True,
             "path": _relative_path(target),
             "bytes": len(data),
-            "filename": filename,
+            "filename": safe_filename,
         }
 
     @router.delete("/delete")

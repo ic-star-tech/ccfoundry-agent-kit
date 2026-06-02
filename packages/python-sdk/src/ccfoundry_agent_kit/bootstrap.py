@@ -255,10 +255,31 @@ class FoundryBootstrap:
         self.state.has_agent_secret = bool(str(self.state.env_vars.get("AGENT_SECRET") or "").strip())
 
     def _save_state(self) -> None:
-        self.state_path.write_text(
-            json.dumps(self.state.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        # Atomic write with restricted permissions — state may contain
+        # AGENT_SECRET, LLM API keys, and other sensitive env vars.
+        import tempfile
+        content = json.dumps(self.state.model_dump(mode="json"), ensure_ascii=False, indent=2)
+        parent = self.state_path.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=str(parent), suffix=".tmp")
+        closed = False
+        try:
+            os.write(fd, content.encode("utf-8"))
+            os.fchmod(fd, 0o600)
+            os.close(fd)
+            closed = True
+            os.replace(tmp_path, str(self.state_path))
+        except BaseException:
+            if not closed:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def update_public_base_url(self, public_base_url: str, *, replace_local_only: bool = True) -> bool:
         normalized = str(public_base_url or "").strip().rstrip("/")
@@ -864,6 +885,11 @@ class FoundryBootstrap:
             merged_env = dict(self.state.env_vars)
             for key, value in approval.env_vars.items():
                 merged_env[key] = value
+            # Persist top-level agent_secret into env_vars so the runtime
+            # can read it from AGENT_SECRET (PTY, sandbox, pull runtime).
+            inline_agent_secret = str(approval.agent_secret or "").strip()
+            if inline_agent_secret and not merged_env.get("AGENT_SECRET"):
+                merged_env["AGENT_SECRET"] = inline_agent_secret
             merged_env["_bootstrap_callback_secret"] = self.callback_secret
             self.state.env_vars = merged_env
             self.state.registered_agent_name = approval.agent_name
@@ -871,7 +897,7 @@ class FoundryBootstrap:
             self.state.invite_status = "REDEEMED"
             self.state.discovery_status = "REGISTERED"
             self.state.approved_at = _utcnow_iso()
-            self.state.has_agent_secret = bool(approval.agent_secret or approval.env_vars.get("AGENT_SECRET"))
+            self.state.has_agent_secret = bool(str(merged_env.get("AGENT_SECRET") or "").strip())
             self.state.owner_pseudonym = approval.owner_pseudonym
             self.state.allocated_resources = dict(approval.allocated_resources or {})
             self.state.last_error = None
