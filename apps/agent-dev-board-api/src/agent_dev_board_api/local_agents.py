@@ -141,8 +141,10 @@ class LocalAgentManager:
         expected = self._instance_dir(normalized_name).resolve(strict=False)
         if not expected.is_relative_to(self.instances_dir):
             raise RuntimeError("Local agent runtime directory is invalid")
-        configured = Path(str(item.get("instance_dir") or expected)).expanduser().resolve(strict=False)
-        if configured != expected:
+        # Only accept instance_dir if it matches the expected canonical path;
+        # never construct a Path from the raw user-provided value.
+        raw_configured = str(item.get("instance_dir") or "").strip()
+        if raw_configured and str(expected) != raw_configured:
             raise RuntimeError("Local agent runtime directory is invalid")
         return expected
 
@@ -384,8 +386,13 @@ class LocalAgentManager:
         logs_dir.mkdir(parents=True, exist_ok=True)
         log_path = logs_dir / "agent.log"
         env_path = self._write_env_file(item)
+        # Use the validated template app_dir (already confirmed within repo_root
+        # by _validated_repo_path) rather than re-resolving the raw template value.
+        validated_app_dir = self._validated_repo_path(
+            template["app_dir"], field_name="Template app dir",
+        )
         pythonpath_entries = [
-            str(Path(template["app_dir"]).resolve(strict=False)),
+            str(validated_app_dir),
             str((self.repo_root / "packages" / "python-sdk" / "src").resolve()),
         ]
         existing_pythonpath = os.environ.get("PYTHONPATH", "").strip()
@@ -399,7 +406,7 @@ class LocalAgentManager:
                 "uvicorn",
                 str(template["app_module"]),
                 "--app-dir",
-                str(template["app_dir"]),
+                str(validated_app_dir),
                 "--host",
                 str(item.get("host") or "127.0.0.1"),
                 "--port",
