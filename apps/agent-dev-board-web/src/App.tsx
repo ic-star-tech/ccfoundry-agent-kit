@@ -1700,7 +1700,14 @@ export default function App() {
   const approvalObserved = Boolean(textValue(bootstrapState.approved_at));
   const registrationStatus = textValue(bootstrapState.registration_status).toUpperCase();
   const discoveryStatus = textValue(bootstrapState.discovery_status).toUpperCase();
+  const inviteStatus = textValue(bootstrapState.invite_status).toUpperCase();
   const onboardingApproved = approvalObserved || registrationStatus === "APPROVED" || gatewayReady;
+  const cloudRunBootstrapComplete =
+    registrationStatus === "APPROVED" &&
+    discoveryStatus === "REGISTERED" &&
+    inviteStatus === "REDEEMED" &&
+    Boolean(textValue(bootstrapState.last_polled_at));
+  const onboardingComplete = guideRunTarget === "cloud_run" ? cloudRunBootstrapComplete : onboardingApproved;
   const onboardingRetired = registrationStatus === "RETIRED";
   const playgroundReady = Boolean(selectedAgentEntry && selectedAgentEntry.status === "online");
   const hasConversation = transcript.length > 0 || reply.trim().length > 0;
@@ -1712,7 +1719,12 @@ export default function App() {
   const liveCloudRunServices = cloudRunRuntimes?.services ?? [];
   const displayedCloudRunDeployment =
     cloudRunCurrentJob?.agent_name === selectedAgent ? cloudRunCurrentJob : selectedCloudRunDeployment;
+  const selectedCloudRunLiveService =
+    liveCloudRunServices.find((runtime) => textValue(runtime.env_agent_name, runtime.service_name) === selectedAgent) ??
+    liveCloudRunServices.find((runtime) => runtime.service_name === displayedCloudRunDeployment?.service_name) ??
+    null;
   const cloudRunDeploymentSucceeded = textValue(displayedCloudRunDeployment?.status) === "succeeded";
+  const cloudRunRuntimeLastAttempt = textValue(selectedCloudRunLiveService?.last_attempt_time);
   const cloudRunPollObserved = Boolean(textValue(bootstrapState.last_polled_at));
   const deploymentTargetReady = guideRunTarget === "cloud_run" ? cloudRunDeploymentSucceeded : playgroundReady;
   const smokeObserved = guideRunTarget === "cloud_run" ? cloudRunDeploymentSucceeded && cloudRunPollObserved : hasConversation;
@@ -1769,17 +1781,21 @@ export default function App() {
     if (!selectedAgent || !bootstrapEnabled || !claimInstalled) {
       return;
     }
-    if (onboardingApproved || onboardingRetired) {
+    if (onboardingComplete || onboardingRetired) {
       return;
     }
     const timer = window.setInterval(() => {
       void probeHandshake(selectedAgent, foundryUrl);
+      if (guideRunTarget === "cloud_run") {
+        void refreshCloudRunRuntimes();
+      }
     }, 5000);
     return () => window.clearInterval(timer);
   }, [
     bootstrapEnabled,
     claimInstalled,
-    onboardingApproved,
+    guideRunTarget,
+    onboardingComplete,
     onboardingRetired,
     selectedAgent,
     foundryUrl,
@@ -2876,7 +2892,7 @@ export default function App() {
                 </span>
                 <span className={`chip ${developerSessionReady ? "tone-success" : ""}`}>3. GitHub login</span>
                 <span className={`chip ${claimInstalled ? "tone-success" : ""}`}>4. Foundry claim</span>
-                <span className={`chip ${onboardingApproved ? "tone-success" : onboardingRetired ? "tone-warn" : ""}`}>5. Onboarded</span>
+                <span className={`chip ${onboardingComplete ? "tone-success" : onboardingRetired ? "tone-warn" : ""}`}>5. Onboarded</span>
                 <span className={`chip ${smokeObserved ? "tone-success" : ""}`}>6. Smoke test</span>
                 <span className={`chip ${foundryPortalOpened ? "tone-success" : ""}`}>7. Foundry test</span>
               </div>
@@ -3433,11 +3449,18 @@ export default function App() {
                     </p>
                   </div>
                 ) : null}
-                {onboardingApproved ? (
+                {onboardingComplete ? (
+                  <div className="reply">
+                    <strong>Foundry onboarding complete</strong>
+                    <p>
+                      The agent has discovered Foundry, redeemed its invite, registered, and received approval.
+                    </p>
+                  </div>
+                ) : guideRunTarget === "cloud_run" && onboardingApproved ? (
                   <div className="reply">
                     <strong>Foundry approval observed</strong>
                     <p>
-                      The agent now has the credentials it needs to talk through the Foundry-managed gateway.
+                      The worker has credentials; Dev Board is still waiting for the live Cloud Run poll state to sync back.
                     </p>
                   </div>
                 ) : (
@@ -3484,7 +3507,7 @@ export default function App() {
                       </div>
                       <div>
                         <span>Last poll</span>
-                        <strong>{textValue(bootstrapState.last_polled_at, "not observed")}</strong>
+                        <strong>{textValue(bootstrapState.last_polled_at, textValue(cloudRunRuntimeLastAttempt, "not observed"))}</strong>
                       </div>
                       <div>
                         <span>Poll endpoint</span>

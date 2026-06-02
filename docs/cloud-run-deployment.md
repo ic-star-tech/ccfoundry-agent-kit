@@ -120,6 +120,11 @@ makes stale workers visible after a source cleanup or demo reset; a worker with
 no matching source is shown as source-missing until it is deleted from Cloud Run
 and Cloud Scheduler.
 
+During claim-based onboarding, approval can arrive before the Dev Board source
+cache has the worker's full discovery and invite state. Cloud Run onboarding is
+therefore considered complete only after discovery is registered, the invite is
+redeemed, registration is approved, and a worker poll has been observed.
+
 The region field offers quick picks for `us-central1`, `europe-west2` (UK London), `asia-east2` (Hong Kong), and `asia-southeast1` (Singapore), but you can type another valid Cloud Run region ID. The poll schedule is a Cloud Scheduler cron expression; the default `* * * * *` triggers `POST /foundry/poll` every minute.
 
 Deployment can take a few minutes because the board runs Docker build/push, creates a Cloud Run revision, updates the public URL env var, grants Scheduler invoker access, and creates or updates the Scheduler job. The UI polls the deployment job and shows elapsed time plus recent log lines while it runs.
