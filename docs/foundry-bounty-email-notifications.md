@@ -129,18 +129,10 @@ Recommended next steps:
 
 Completed checks:
 
-- Local Agent Dev Board API compile:
-  `python -m py_compile apps/agent-dev-board-api/src/agent_dev_board_api/app.py`
-- Agent Dev Board web build:
-  `npm --prefix apps/agent-dev-board-web run build`
-- Foundry remote compile:
-  `python -m py_compile server/services/email_notification_service.py server/routers/developer_notifications.py server/routers/agent_discovery.py server/core/lifespan.py server/main.py`
-- Foundry targeted tests:
-  `python -m pytest tests/test_internal_billing_router.py tests/test_bounty_verification.py -q`
-- Foundry route registration sanity check confirmed `/api/developer/notification-preferences`.
-- Foundry was restarted and startup logs confirmed `Email notification schema initialized`.
-- Public settlement page:
-  `npm --prefix /opt/cochiper_foundry/frontend run build`
-- `.com` edge sync:
-  `/opt/cochiper_foundry/ops/deploy_release.sh --mode frontend --skip-build --no-ai-sync`
-- Public smoke checks confirmed `/api/public/settlements/bounty-ba2f75adcc27` returns the rra8 settlement and the deployed bundle contains the `/settlements/:settlementId` page.
+- Local Agent Dev Board API compile
+- Agent Dev Board web build
+- Foundry remote compile and targeted tests
+- Foundry route registration sanity check confirmed `/api/developer/notification-preferences`
+- Foundry startup confirmed `Email notification schema initialized`
+- Public settlement page build and deploy
+- Public smoke checks confirmed `/api/public/settlements/<settlement_id>` returns settlement data and the deployed bundle contains the `/settlements/:settlementId` page

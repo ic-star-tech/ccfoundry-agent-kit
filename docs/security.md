@@ -46,7 +46,7 @@ ccfoundry dev-board --host 0.0.0.0
 When running on LAN, use only trusted networks. To allow a specific browser origin, set:
 
 ```bash
-CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGINS=http://192.168.1.10:3000
+CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGINS=http://YOUR_LAN_IP:3000
 ```
 
 For multiple exact origins, use a comma-separated list. For advanced cases:

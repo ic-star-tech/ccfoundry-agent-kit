@@ -102,7 +102,6 @@ See [Philosophy](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/d
 - [Protocol (Wire Format)](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/protocol.md) — HTTP contract and SSE events
 - [Cloud Run Deployment](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/cloud-run-deployment.md) — Deploy agents to Google Cloud Run with Cloud Scheduler
 - [Resource Cost Accounting Plan](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/resource-cost-accounting-plan.md) — Implementation plan for deducting Foundry-provided LLM and sandbox costs from paid task settlement
-- [Resource Cost Accounting Review](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/resource-cost-accounting-implementation-review.md) — Implementation status and E2E verification log
 - [Bounty Email Notifications](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/foundry-bounty-email-notifications.md) — Settlement success email pipeline
 - [Security](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/security.md) — Local threat model, CORS, URL handling, and secret hygiene
 - [Non-Goals](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/non-goals.md) — What this repo intentionally excludes

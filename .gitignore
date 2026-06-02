@@ -48,3 +48,6 @@ fix_*.py
 demo_*.py
 query_*.py
 agent_discovery_orig.py
+
+# Internal implementation review logs (contain sensitive operational details)
+docs/resource-cost-accounting-implementation-review.md

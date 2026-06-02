@@ -24,7 +24,7 @@ The API is a privileged local development service. It defaults to localhost-only
 For LAN browser testing, pin the allowed origin explicitly:
 
 ```bash
-CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGINS=http://192.168.1.10:3000
+CCFOUNDRY_DEV_BOARD_ALLOWED_ORIGINS=http://YOUR_LAN_IP:3000
 ```
 
 See [`docs/security.md`](../../docs/security.md) for the full threat model.

@@ -119,8 +119,8 @@ Key capabilities:
   is preserved for audit.
 - The pull runtime enforces `invocation_id` alignment and passes billing context
   through the entire bounty execution → sandbox → deliverable submit chain.
-- Verified E2E with Cloud Run agents `test11` and `v1_agent_ext` including real
-  Stripe PaymentIntents and sandbox cost deduction at `$4/hour` runtime rate.
+- Verified E2E with Cloud Run agents including real Stripe PaymentIntents
+  and sandbox cost deduction.
 
 ### 5. Bounty Email Notifications
 

@@ -71,7 +71,7 @@ Content-Type: application/json
 - Check pool status before acquiring: `GET /pool-status`
 
 ## Environment Variables
-- `SANDBOX_DAEMON_URL`: Daemon endpoint (default: `http://192.168.1.211:9000`)
+- `SANDBOX_DAEMON_URL`: Daemon endpoint (default: `http://localhost:9000`)
 - `SANDBOX_TOKEN`: Authentication token for the daemon API
 
 ## Error Handling
