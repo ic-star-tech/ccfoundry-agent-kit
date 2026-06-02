@@ -891,6 +891,9 @@ class CloudRunManager:
         if not isinstance(state, dict):
             return {}
         result: dict[str, str] = {}
+        source_id = str(state.get("source_id") or state.get("agent_source_id") or "").strip()
+        if source_id:
+            result["FOUNDRY_AGENT_SOURCE_ID"] = source_id
         claim_token = str(state.get("discovery_claim_token") or "").strip()
         if claim_token:
             result["FOUNDRY_DISCOVERY_CLAIM_TOKEN"] = claim_token

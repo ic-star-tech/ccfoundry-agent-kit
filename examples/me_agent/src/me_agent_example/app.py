@@ -268,6 +268,11 @@ def _build_foundry_bootstrap() -> FoundryBootstrap | None:
         or str(foundry_cfg.get("discovery_claim_token") or "").strip()
         or None
     )
+    source_id = (
+        os.getenv("FOUNDRY_AGENT_SOURCE_ID", "").strip()
+        or str(foundry_cfg.get("source_id") or foundry_cfg.get("agent_source_id") or "").strip()
+        or None
+    )
     developer_identity = _env_json(
         "FOUNDRY_DEVELOPER_IDENTITY_JSON",
         foundry_cfg.get("developer_identity") or {},
@@ -295,6 +300,7 @@ def _build_foundry_bootstrap() -> FoundryBootstrap | None:
         agent_space_dir=BASE_DIR,
         config=FoundryBootstrapConfig(
             enabled=True,
+            source_id=source_id,
             foundry_base_url=foundry_base_url,
             public_base_url=public_base_url,
             network_zone=network_zone,

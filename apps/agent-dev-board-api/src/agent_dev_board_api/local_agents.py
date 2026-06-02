@@ -8,6 +8,7 @@ import signal
 import socket
 import subprocess
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -200,6 +201,14 @@ class LocalAgentManager:
         entries = payload.get("agents")
         if not isinstance(entries, list):
             payload["agents"] = []
+            entries = payload["agents"]
+        changed = False
+        for item in entries:
+            if isinstance(item, dict) and not str(item.get("source_id") or "").strip():
+                item["source_id"] = str(uuid.uuid4())
+                changed = True
+        if changed:
+            self._save_registry(payload)
         return payload
 
     def _save_registry(self, payload: dict[str, Any]) -> None:
@@ -357,6 +366,7 @@ class LocalAgentManager:
         lines = [
             f"ME_AGENT_NAME={item['name']}",
             f"ME_AGENT_LABEL={item['label']}",
+            f"FOUNDRY_AGENT_SOURCE_ID={item['source_id']}",
             "FOUNDRY_DISCOVERY_ENABLE=true",
             f"FOUNDRY_BASE_URL={foundry_url}",
             f"FOUNDRY_AGENT_PUBLIC_URL={item['base_url']}",
@@ -453,6 +463,7 @@ class LocalAgentManager:
         self._copy_template(template, instance_dir)
 
         item = {
+            "source_id": str(uuid.uuid4()),
             "name": normalized_name,
             "label": str(label or "").strip() or _display_label(normalized_name),
             "template_id": template["id"],

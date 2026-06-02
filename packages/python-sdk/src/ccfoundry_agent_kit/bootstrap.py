@@ -78,12 +78,15 @@ class FoundryDeveloperClaimPayload(BaseModel):
     bootstrap_delivery: str | None = None
     foundry_base_url: str | None = None
     public_base_url: str | None = None
+    source_id: str | None = None
+    agent_source_id: str | None = None
     developer_identity: dict[str, Any] = Field(default_factory=dict)
     force_rediscover: bool = False
 
 
 class FoundryBootstrapConfig(BaseModel):
     enabled: bool = False
+    source_id: str | None = None
     foundry_base_url: str = ""
     public_base_url: str = ""
     network_zone: str = "EXTERNAL"
@@ -110,6 +113,7 @@ class FoundryBootstrapConfig(BaseModel):
 
 
 class FoundryBootstrapState(BaseModel):
+    source_id: str | None = None
     foundry_base_url: str | None = None
     public_base_url: str | None = None
     discovery_id: str | None = None
@@ -159,6 +163,10 @@ class FoundryBootstrap:
         state_public_base_url = str(self.state.public_base_url or "").strip()
         if not str(self.config.public_base_url or "").strip() and state_public_base_url:
             self.config.public_base_url = state_public_base_url
+        configured_source_id = str(config.source_id or self.state.source_id or "").strip()
+        if configured_source_id:
+            self.config.source_id = configured_source_id
+            self.state.source_id = configured_source_id
         self.state.discovery_nonce = (
             str(config.discovery_nonce or self.state.discovery_nonce or secrets.token_hex(16)).strip()
         )
@@ -193,6 +201,10 @@ class FoundryBootstrap:
 
     def _seed_state_from_environment(self) -> None:
         """Restore approved pull-runtime state when the filesystem is ephemeral."""
+        source_id = os.getenv("FOUNDRY_AGENT_SOURCE_ID", "").strip()
+        if source_id:
+            self.config.source_id = source_id
+            self.state.source_id = source_id
         registered_agent_name = os.getenv("FOUNDRY_REGISTERED_AGENT_NAME", "").strip()
         if registered_agent_name:
             self.state.registered_agent_name = registered_agent_name
@@ -278,6 +290,10 @@ class FoundryBootstrap:
         profile_metadata.setdefault("agent_name", self.manifest.name)
         profile_metadata.setdefault("agent_label", self.manifest.label)
         profile_metadata.setdefault("sdk", "ccfoundry-agent-kit")
+        source_id = str(self.state.source_id or self.config.source_id or "").strip()
+        if source_id:
+            profile_metadata.setdefault("agent_source_id", source_id)
+            profile_metadata.setdefault("source_id", source_id)
         execution_contract = _deep_merge_dicts(
             _default_execution_contract(self.config.network_zone),
             dict((self.config.requirements or {}).get("execution_contract") or {}),
@@ -303,6 +319,9 @@ class FoundryBootstrap:
         developer_access: dict[str, Any] = {
             "bootstrap_delivery": self.config.bootstrap_delivery,
         }
+        if source_id:
+            developer_access["agent_source_id"] = source_id
+            developer_access["source_id"] = source_id
         discovery_claim_token = str(self.state.discovery_claim_token or self.config.discovery_claim_token or "").strip()
         if discovery_claim_token:
             developer_access["discovery_claim_token"] = discovery_claim_token
@@ -634,6 +653,7 @@ class FoundryBootstrap:
 
         return {
             "enabled": self.config.enabled,
+            "source_id": self.state.source_id or self.config.source_id,
             "foundry_base_url": self.config.foundry_base_url.rstrip("/"),
             "public_base_url": self.config.public_base_url.rstrip("/"),
             "network_zone": self.config.network_zone,
@@ -687,6 +707,10 @@ class FoundryBootstrap:
             if public_base_url:
                 self.config.public_base_url = public_base_url
                 self.state.public_base_url = public_base_url
+            source_id = str(payload.source_id or payload.agent_source_id or "").strip()
+            if source_id:
+                self.config.source_id = source_id
+                self.state.source_id = source_id
             self.state.discovery_claim_token = claim_token
             self.state.last_claimed_at = _utcnow_iso()
             if payload.developer_identity:

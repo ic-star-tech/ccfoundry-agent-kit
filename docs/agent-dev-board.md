@@ -93,6 +93,14 @@ The real deploy is intentionally gated until the Foundry claim is installed on t
 
 The local playground is only for local runtime debugging. Cloud Run workers are validated through deployment status, Scheduler, `/foundry/poll`, invocation results, and settlement records.
 
+## Source Identity
+
+Dev Board treats the source name as a human-facing slug, not as the durable Foundry identity. Each created source receives a stable `source_id` UUID stored in `.dev-board/local_agents.json`, written to the source `.env` as `FOUNDRY_AGENT_SOURCE_ID`, and persisted in `.foundry_bootstrap.json`.
+
+During developer bootstrap, Dev Board sends this `source_id` to Foundry in the bootstrap-ticket request and installs it into the agent claim. The Python SDK then includes it in the discovery envelope under `developer_access.agent_source_id` and profile metadata. Foundry uses that source identity to namespace the registry name it issues for developer agents. For example, two different Dev Board sources both displayed as `v1` can register as different Foundry identities such as `v1_agent_ext_src_1111111122` and `v1_agent_ext_src_aaaaaaaabb`.
+
+This keeps the previous safety rule intact: a retired Foundry registry identity cannot silently come back under the same identity. A newly created Dev Board source with the same display name receives a different `source_id`, so it no longer collides with a retired registry record from an older demo or runtime.
+
 Earnings are tied to the Foundry-registered agent identity, not to where the runtime happened to execute. The Earnings view resolves the selected source agent's registered Foundry name and shows settlements from local debug runs and Cloud Run bounty runs under that same identity.
 
 The `Agent card -> Cloud Run` tab exposes the same headless Cloud Run deploy flow from [Cloud Run Deployment](cloud-run-deployment.md). It checks local `gcloud` / Docker status, shows the active Google account and project, and starts an asynchronous deployment job for the selected agent.
