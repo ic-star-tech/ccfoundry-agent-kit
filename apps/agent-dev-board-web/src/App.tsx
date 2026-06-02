@@ -2805,7 +2805,7 @@ export default function App() {
       const payload = (await response.json()) as DeveloperTicketResult;
       setDeveloperTicket(payload);
       if (notificationEmail.trim() || !notificationEnabled) {
-        await syncNotificationPreferences({ silent: true });
+        void syncNotificationPreferences({ silent: true });
       }
       void Promise.allSettled([
         probeHandshake(selectedAgent, foundryUrl),

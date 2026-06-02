@@ -240,13 +240,7 @@ if ! $DRY_RUN; then
         --region="$GCP_REGION" \
         --format="value(status.url)" 2>/dev/null)
     log "Service URL: $SERVICE_URL"
-
-    # Update FOUNDRY_AGENT_PUBLIC_URL with the actual Cloud Run URL
-    run gcloud run services update "$SERVICE_NAME" \
-        --project="$GCP_PROJECT" \
-        --region="$GCP_REGION" \
-        --update-env-vars="FOUNDRY_AGENT_PUBLIC_URL=${SERVICE_URL}" \
-        --quiet
+    log "Runtime will infer FOUNDRY_AGENT_PUBLIC_URL from the first Cloud Scheduler poll."
 else
     SERVICE_URL="https://${SERVICE_NAME}-xxx.run.app"
     log "(dry-run) Service URL would be: $SERVICE_URL"

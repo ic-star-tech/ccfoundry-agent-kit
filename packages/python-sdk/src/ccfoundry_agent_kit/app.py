@@ -117,6 +117,15 @@ def create_agent_app(
             metadata=merged_metadata,
         )
 
+    def _public_base_url_from_request(request: Request) -> str:
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+        if not host:
+            return ""
+        proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+        if os.getenv("AGENT_DEPLOY_MODE", "local").strip().lower() == "cloud_run":
+            proto = "https"
+        return f"{proto}://{host}".rstrip("/")
+
     pull_runtime = (
         FoundryPullRuntime(
             bootstrap=foundry_bootstrap,
@@ -195,7 +204,7 @@ def create_agent_app(
         return agent_space.list_reflections(date=date, limit=limit)
 
     @app.post("/foundry/poll")
-    async def foundry_poll() -> dict[str, Any]:
+    async def foundry_poll(request: Request) -> dict[str, Any]:
         """Single poll cycle for Cloud Scheduler or external cron.
 
         When ``AGENT_DEPLOY_MODE=cloud_run`` the internal background loops
@@ -204,6 +213,9 @@ def create_agent_app(
         """
         results: dict[str, Any] = {"mode": os.getenv("AGENT_DEPLOY_MODE", "local")}
         if foundry_bootstrap:
+            inferred_public_url = _public_base_url_from_request(request)
+            if inferred_public_url and foundry_bootstrap.update_public_base_url(inferred_public_url):
+                results["public_base_url"] = inferred_public_url
             results["heartbeat"] = await foundry_bootstrap.heartbeat_once()
         if pull_runtime and pull_runtime.ready():
             rounds: list[dict[str, Any]] = []

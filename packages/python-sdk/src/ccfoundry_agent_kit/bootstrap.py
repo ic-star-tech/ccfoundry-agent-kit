@@ -29,6 +29,18 @@ def _normalize_bootstrap_delivery(value: str | None) -> str:
     return normalized
 
 
+def _is_local_public_url(value: str | None) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return True
+    return (
+        "localhost" in normalized
+        or "127.0.0.1" in normalized
+        or "0.0.0.0" in normalized
+        or normalized.startswith("http://[::1]")
+    )
+
+
 def _default_execution_contract(network_zone: str | None) -> dict[str, Any]:
     if str(network_zone or "EXTERNAL").strip().upper() != "EXTERNAL":
         return {}
@@ -247,6 +259,20 @@ class FoundryBootstrap:
             json.dumps(self.state.model_dump(mode="json"), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def update_public_base_url(self, public_base_url: str, *, replace_local_only: bool = True) -> bool:
+        normalized = str(public_base_url or "").strip().rstrip("/")
+        if not normalized.startswith(("http://", "https://")):
+            return False
+        current = str(self.config.public_base_url or "").strip().rstrip("/")
+        if normalized == current:
+            return False
+        if replace_local_only and current and not _is_local_public_url(current):
+            return False
+        self.config.public_base_url = normalized
+        self.state.public_base_url = normalized
+        self._save_state()
+        return True
 
     def build_agent_card(self) -> dict[str, Any]:
         public_url = self.config.public_base_url.rstrip("/")
