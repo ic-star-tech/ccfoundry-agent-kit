@@ -211,6 +211,19 @@ def _load_agents() -> dict[str, LiteAgentConfig]:
     return result
 
 
+def _agent_config_from_local_registry(agent_name: str) -> LiteAgentConfig | None:
+    try:
+        _, item = LOCAL_AGENT_MANAGER._find_agent(agent_name)
+    except Exception:
+        return None
+    name = str(item.get("name") or "").strip()
+    label = str(item.get("label") or name).strip()
+    base_url = str(item.get("base_url") or "").strip()
+    if not name or not label or not base_url:
+        return None
+    return LiteAgentConfig.model_validate({"name": name, "label": label, "base_url": base_url})
+
+
 def _render_context(history: list[dict[str, str]]) -> str:
     lines: list[str] = []
     for item in history[-20:]:
@@ -526,11 +539,12 @@ async def _cloud_run_request(method: str, url: str, *, audience: str, timeout: f
 
     last_response: httpx.Response | None = None
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        for token_source, token in attempts:
+        for index, (token_source, token) in enumerate(attempts):
             headers = {"Authorization": f"Bearer {token}"} if token else {}
             response = await client.request(method, url, headers=headers)
             response.extensions["ccfoundry_token_source"] = token_source
-            if response.is_success or response.status_code not in {401, 403}:
+            has_more_attempts = index < len(attempts) - 1
+            if response.is_success or response.status_code not in {401, 403, 404} or not has_more_attempts:
                 return response
             last_response = response
     return last_response or response
@@ -1725,7 +1739,7 @@ async def get_manifest(agent_name: str) -> dict[str, Any]:
 @app.post("/api/handshake/probe")
 async def probe_handshake(request: LiteHandshakeProbeRequest) -> dict[str, Any]:
     agents = _load_agents()
-    agent = agents.get(request.agent_name)
+    agent = agents.get(request.agent_name) or _agent_config_from_local_registry(request.agent_name)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -1736,8 +1750,8 @@ async def probe_handshake(request: LiteHandshakeProbeRequest) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
         bootstrap_state, bootstrap_probe = await _probe_json(client, agent_state_url)
         agent_card, agent_card_probe = await _probe_json(client, agent_card_url)
+        source_state, source_state_path = _read_agent_source_bootstrap_state(agent.name)
         if not bool((bootstrap_probe or {}).get("ok")):
-            source_state, source_state_path = _read_agent_source_bootstrap_state(agent.name)
             if source_state:
                 bootstrap_state = _public_bootstrap_state(source_state)
                 bootstrap_probe = {
@@ -1745,6 +1759,15 @@ async def probe_handshake(request: LiteHandshakeProbeRequest) -> dict[str, Any]:
                     "url": str(source_state_path or ""),
                     "detail": "source_state_fallback",
                 }
+
+        cloud_run_state = await _agent_cloud_run_bootstrap_state(agent.name, source_state)
+        if cloud_run_state:
+            bootstrap_state = _public_bootstrap_state(cloud_run_state)
+            bootstrap_probe = {
+                "ok": True,
+                "url": "cloud_run_bootstrap_state",
+                "detail": "cloud_run_state",
+            }
 
         if not normalized_foundry_url and isinstance(bootstrap_state, dict):
             normalized_foundry_url = _normalize_url(str(bootstrap_state.get("foundry_base_url") or ""))
