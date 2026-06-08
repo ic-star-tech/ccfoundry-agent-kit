@@ -142,6 +142,26 @@ type FoundryBootstrapSession = {
   expires_in_minutes: number;
 };
 
+type GithubDeviceSession = {
+  session_id: string;
+  foundry_url: string;
+  user_code: string;
+  verification_uri: string;
+  verification_uri_complete?: string;
+  expires_in: number;
+  interval: number;
+};
+
+type GithubDevicePollResult = {
+  ok: boolean;
+  status: string;
+  retry_after?: number;
+  message?: string;
+  foundry_url?: string;
+  github_token?: string;
+  github?: Record<string, unknown>;
+};
+
 type LocalAgentTemplate = {
   id: string;
   label: string;
@@ -1590,6 +1610,8 @@ export default function App() {
   const [notificationStatus, setNotificationStatus] = useState("");
   const [oauthLoading, setOauthLoading] = useState(false);
   const [foundryBootstrapSession, setFoundryBootstrapSession] = useState<FoundryBootstrapSession | null>(null);
+  const [githubDeviceSession, setGithubDeviceSession] = useState<GithubDeviceSession | null>(null);
+  const [githubDeviceIdentity, setGithubDeviceIdentity] = useState<Record<string, unknown> | null>(null);
   const [localAgentLoading, setLocalAgentLoading] = useState(false);
   const [localAgentError, setLocalAgentError] = useState("");
   const [retiringAgent, setRetiringAgent] = useState("");
@@ -1733,9 +1755,11 @@ export default function App() {
   const displaySensitiveBlock = (value: unknown, fallback = "") => sensitiveBlockDisplay(value, fallback, showSensitiveInfo);
   const displayedDeveloperLogin = textValue(
     foundryBootstrapSession?.github_login,
-    textValue(developerGithub.login, "not detected"),
+    textValue(githubDeviceIdentity?.login, textValue(developerGithub.login, "not detected")),
   );
-  const developerSessionReady = Boolean(developerForm.developer_token.trim() || foundryBootstrapSession);
+  const developerSessionReady = Boolean(
+    developerForm.developer_token.trim() || developerForm.github_token.trim() || foundryBootstrapSession,
+  );
   const developerAuthReady = developerSessionReady || boolValue(developerGithub.has_token);
   const foundryBrowserSessionReady = Boolean(foundryBootstrapSession);
   const claimInstalled = bootstrapHasClaim || boolValue(developerTicket?.claim_applied) || Boolean(textValue(bootstrapState.last_claimed_at));
@@ -1892,6 +1916,67 @@ export default function App() {
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
   }, [normalizedFoundryUrl]);
+
+  useEffect(() => {
+    if (!githubDeviceSession || !oauthLoading) {
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/developer/github-device/${encodeURIComponent(githubDeviceSession.session_id)}/poll`,
+          { method: "POST" },
+        );
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response));
+        }
+        const payload = (await response.json()) as GithubDevicePollResult;
+        if (cancelled) {
+          return;
+        }
+        if (payload.ok) {
+          const githubToken = textValue(payload.github_token);
+          if (!githubToken) {
+            throw new Error("GitHub did not return an access token.");
+          }
+          setDeveloperForm((prev) => ({
+            ...prev,
+            github_token: githubToken,
+          }));
+          setGithubDeviceIdentity(payload.github || {});
+          setGithubDeviceSession(null);
+          setOauthLoading(false);
+          setDeveloperError("");
+          setTicketError("");
+          return;
+        }
+        if (payload.status === "pending") {
+          timer = window.setTimeout(poll, Math.max(Number(payload.retry_after) || githubDeviceSession.interval, 1) * 1000);
+          return;
+        }
+        setGithubDeviceSession(null);
+        setOauthLoading(false);
+        setDeveloperError(textValue(payload.message, "GitHub device login was not completed."));
+      } catch (err) {
+        if (!cancelled) {
+          setOauthLoading(false);
+          setDeveloperError(String(err));
+        }
+      }
+    };
+
+    timer = window.setTimeout(poll, Math.max(githubDeviceSession.interval, 1) * 1000);
+    return () => {
+      cancelled = true;
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [githubDeviceSession, oauthLoading]);
 
   const runtimeBadge = useMemo<RuntimeBadge>(() => {
     if (devModeEnabled && hasDevOverrides) {
@@ -2826,7 +2911,42 @@ export default function App() {
     }
   }
 
-  function loginWithFoundryGithub() {
+  async function loginWithFoundryGithub() {
+    if (!normalizedFoundryUrl) {
+      setDeveloperError("Foundry URL is required before GitHub login.");
+      return;
+    }
+    setOauthLoading(true);
+    setDeveloperError("");
+    setGithubDeviceSession(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/developer/github-device/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          foundry_url: normalizedFoundryUrl,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload = (await response.json()) as GithubDeviceSession;
+      setGithubDeviceSession(payload);
+      setGithubDeviceIdentity(null);
+      if (payload.user_code && navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(payload.user_code).catch(() => undefined);
+      }
+      const verificationUrl = textValue(payload.verification_uri_complete, payload.verification_uri);
+      if (verificationUrl) {
+        window.open(verificationUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (err) {
+      setOauthLoading(false);
+      setDeveloperError(String(err));
+    }
+  }
+
+  function loginWithFoundryGithubPopup() {
     if (!normalizedFoundryUrl) {
       setDeveloperError("Foundry URL is required before GitHub login.");
       return;
@@ -3407,19 +3527,43 @@ export default function App() {
                 {developerSessionReady ? (
                   <div className="reply">
                     <strong>{displaySensitive(displayedDeveloperLogin, "not detected")}</strong>
-                    <p>Developer bootstrap session is ready. Token TTL: {foundryBootstrapSession?.expires_in_minutes || 30} min.</p>
+                    <p>
+                      {developerForm.github_token.trim() && !developerForm.developer_token.trim() && !foundryBootstrapSession
+                        ? "GitHub device authorization is ready for Foundry bootstrap."
+                        : `Developer bootstrap session is ready. Token TTL: ${foundryBootstrapSession?.expires_in_minutes || 30} min.`}
+                    </p>
                   </div>
                 ) : (
                   <p className="muted">
-                    Local GitHub CLI detection is optional. The popup login is the recommended path because it returns a
-                    Foundry-scoped developer token directly to this board.
+                    Local GitHub CLI detection is optional. The device login is the recommended path for public Dev Board
+                    deployments because it does not require a callback URL.
                   </p>
                 )}
                 <div className="actions split-actions">
                   <button className="secondary" onClick={loginWithFoundryGithub} disabled={oauthLoading || !normalizedFoundryUrl}>
                     {oauthLoading ? "Waiting for GitHub..." : "Login with GitHub"}
                   </button>
+                  <button className="secondary" onClick={loginWithFoundryGithubPopup} disabled={oauthLoading || !normalizedFoundryUrl}>
+                    Popup fallback
+                  </button>
                 </div>
+                {githubDeviceSession ? (
+                  <div className="device-login-box">
+                    <div>
+                      <strong>Enter this code on GitHub</strong>
+                      <p>Dev Board is waiting for GitHub authorization. Keep this page open.</p>
+                    </div>
+                    <code className="device-code">{githubDeviceSession.user_code}</code>
+                    <a
+                      className="link-button"
+                      href={githubDeviceSession.verification_uri_complete || githubDeviceSession.verification_uri}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open GitHub
+                    </a>
+                  </div>
+                ) : null}
                 <div className="notification-box">
                   <label>
                     Completion email

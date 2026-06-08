@@ -3,6 +3,8 @@ from __future__ import annotations
 from agent_dev_board_api.app import (
     _cors_allowed_origin_regex,
     _discover_github_token_for_foundry,
+    _github_client_id_from_authorization_url,
+    _github_device_client_id_from_env,
     _normalize_local_agent_url,
     _normalize_url,
 )
@@ -50,3 +52,36 @@ def test_custom_foundry_requires_explicit_github_token() -> None:
         "ghp_explicit",
         "user_input",
     )
+
+
+def test_github_client_id_from_authorization_url() -> None:
+    client_id, scope = _github_client_id_from_authorization_url(
+        "https://github.com/login/oauth/authorize?client_id=abc123&scope=read%3Auser"
+    )
+
+    assert client_id == "abc123"
+    assert scope == "read:user"
+
+
+def test_github_client_id_from_authorization_url_rejects_non_github() -> None:
+    assert _github_client_id_from_authorization_url("https://example.com/login/oauth/authorize?client_id=abc") == (
+        "",
+        "",
+    )
+
+
+def test_github_device_client_id_from_env_origin_mapping(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "CCFOUNDRY_GITHUB_DEVICE_CLIENT_IDS_JSON",
+        '{"https://foundry.example.com":"origin-client","foundry.example.com":"host-client"}',
+    )
+    monkeypatch.delenv("CCFOUNDRY_GITHUB_DEVICE_CLIENT_ID", raising=False)
+
+    assert _github_device_client_id_from_env("https://foundry.example.com") == "origin-client"
+
+
+def test_github_device_client_id_from_env_default(monkeypatch) -> None:
+    monkeypatch.setenv("CCFOUNDRY_GITHUB_DEVICE_CLIENT_IDS_JSON", "{}")
+    monkeypatch.setenv("CCFOUNDRY_GITHUB_DEVICE_CLIENT_ID", "default-client")
+
+    assert _github_device_client_id_from_env("https://custom.example.com") == "default-client"

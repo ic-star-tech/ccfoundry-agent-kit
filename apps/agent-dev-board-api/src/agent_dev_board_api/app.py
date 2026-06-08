@@ -6,11 +6,12 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import yaml
@@ -31,6 +32,7 @@ AGENTS_FILE = Path(os.getenv("CCFOUNDRY_AGENTS_FILE", str(APP_DIR / "agents.yaml
 RUNTIME_DIR = AGENTS_FILE.parent
 VENV_PYTHON = Path(os.getenv("CCFOUNDRY_DEV_VENV_PYTHON", str(REPO_ROOT / ".venv" / "bin" / "python"))).expanduser()
 TRANSCRIPTS: dict[str, list[dict[str, str]]] = {}
+GITHUB_DEVICE_SESSIONS: dict[str, dict[str, Any]] = {}
 logger = logging.getLogger(__name__)
 SKILL_STORE = SkillStore()
 
@@ -128,6 +130,11 @@ class DeveloperNotificationPreferencesSyncRequest(BaseModel):
     github_token: str = ""
     email: str = ""
     bounty_success_email_enabled: bool = True
+
+
+class DeveloperGithubDeviceStartRequest(BaseModel):
+    foundry_url: str = ""
+    scope: str = ""
 
 
 class LocalAgentTemplate(BaseModel):
@@ -467,6 +474,83 @@ async def _github_identity(token: str) -> dict[str, Any]:
             "authenticated": False,
             "detail": "GitHub API request failed",
         }
+
+
+def _github_device_client_id_from_env(foundry_url: str) -> str:
+    normalized_foundry_url = _normalize_url(foundry_url)
+    host = str(urlparse(normalized_foundry_url).hostname or "").strip().lower()
+    origin = ""
+    if normalized_foundry_url:
+        parsed = urlparse(normalized_foundry_url)
+        if parsed.scheme and parsed.netloc:
+            origin = f"{parsed.scheme}://{parsed.netloc}".lower()
+
+    raw_mapping = os.getenv("CCFOUNDRY_GITHUB_DEVICE_CLIENT_IDS_JSON", "").strip()
+    if raw_mapping:
+        try:
+            mapping = json.loads(raw_mapping)
+        except json.JSONDecodeError:
+            mapping = {}
+        if isinstance(mapping, dict):
+            for key in (origin, host):
+                value = str(mapping.get(key) or "").strip()
+                if value:
+                    return value
+
+    return os.getenv("CCFOUNDRY_GITHUB_DEVICE_CLIENT_ID", "").strip()
+
+
+def _github_client_id_from_authorization_url(value: str) -> tuple[str, str]:
+    parsed = urlparse(str(value or "").strip())
+    if parsed.netloc.lower() != "github.com" or parsed.path != "/login/oauth/authorize":
+        return "", ""
+    query = parse_qs(parsed.query)
+    client_id = str((query.get("client_id") or [""])[0]).strip()
+    scope = str((query.get("scope") or [""])[0]).strip()
+    return client_id, scope
+
+
+async def _github_device_client_from_foundry(foundry_url: str) -> tuple[str, str]:
+    normalized_foundry_url = _normalize_url(foundry_url)
+    if not normalized_foundry_url:
+        raise HTTPException(status_code=400, detail="Foundry URL is required")
+
+    local_return_origin = "http://127.0.0.1:3000"
+    bootstrap_url = (
+        f"{normalized_foundry_url}/api/auth/github/bootstrap/start"
+        f"?return_origin={quote(local_return_origin, safe='')}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+            response = await client.get(bootstrap_url)
+    except httpx.HTTPError as exc:
+        logger.warning("GitHub OAuth client discovery failed for %s", normalized_foundry_url, exc_info=exc)
+        response = None
+
+    if response is not None and response.status_code in {301, 302, 303, 307, 308}:
+        client_id, scope = _github_client_id_from_authorization_url(response.headers.get("location", ""))
+        if client_id:
+            return client_id, scope
+
+    client_id = _github_device_client_id_from_env(normalized_foundry_url)
+    if client_id:
+        return client_id, "read:user"
+
+    raise HTTPException(
+        status_code=502,
+        detail="Could not discover the GitHub OAuth client ID from the target Foundry.",
+    )
+
+
+def _prune_github_device_sessions() -> None:
+    now = time.time()
+    expired = [
+        session_id
+        for session_id, session in GITHUB_DEVICE_SESSIONS.items()
+        if float(session.get("expires_at") or 0) <= now
+    ]
+    for session_id in expired:
+        GITHUB_DEVICE_SESSIONS.pop(session_id, None)
 
 
 async def _agent_bootstrap_state(agent: LiteAgentConfig) -> dict[str, Any]:
@@ -1844,6 +1928,137 @@ async def developer_context(request: DeveloperContextRequest) -> dict[str, Any]:
         },
         "developer_identity": _developer_identity_from_context(git_context, github_identity),
     }
+
+
+@app.post("/api/developer/github-device/start")
+async def start_developer_github_device_flow(request: DeveloperGithubDeviceStartRequest) -> dict[str, Any]:
+    normalized_foundry_url = _normalize_url(request.foundry_url)
+    if not normalized_foundry_url:
+        raise HTTPException(status_code=400, detail="Foundry URL is required")
+
+    client_id, discovered_scope = await _github_device_client_from_foundry(normalized_foundry_url)
+    scope = str(request.scope or discovered_scope or "read:user").strip() or "read:user"
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        response = await client.post(
+            "https://github.com/login/device/code",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "ccfoundry-agent-kit-dev-board",
+            },
+            data={
+                "client_id": client_id,
+                "scope": scope,
+            },
+        )
+    payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+    if not response.is_success or not isinstance(payload, dict) or not payload.get("device_code"):
+        detail = str(payload.get("error_description") or payload.get("error") or "GitHub device flow failed").strip()
+        raise HTTPException(status_code=502, detail=detail)
+
+    _prune_github_device_sessions()
+    session_id = uuid.uuid4().hex
+    expires_in = int(payload.get("expires_in") or 900)
+    interval = max(int(payload.get("interval") or 5), 5)
+    GITHUB_DEVICE_SESSIONS[session_id] = {
+        "client_id": client_id,
+        "device_code": str(payload.get("device_code") or ""),
+        "foundry_url": normalized_foundry_url,
+        "interval": interval,
+        "next_poll_at": time.time() + interval,
+        "expires_at": time.time() + expires_in,
+    }
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "foundry_url": normalized_foundry_url,
+        "user_code": str(payload.get("user_code") or ""),
+        "verification_uri": str(payload.get("verification_uri") or "https://github.com/login/device"),
+        "verification_uri_complete": str(payload.get("verification_uri_complete") or ""),
+        "expires_in": expires_in,
+        "interval": interval,
+        "scope": scope,
+    }
+
+
+@app.post("/api/developer/github-device/{session_id}/poll")
+async def poll_developer_github_device_flow(session_id: str) -> dict[str, Any]:
+    _prune_github_device_sessions()
+    normalized_session_id = str(session_id or "").strip()
+    session = GITHUB_DEVICE_SESSIONS.get(normalized_session_id)
+    if not session:
+        return {"ok": False, "status": "expired", "message": "GitHub device login expired. Start login again."}
+
+    now = time.time()
+    next_poll_at = float(session.get("next_poll_at") or 0)
+    if now < next_poll_at:
+        return {
+            "ok": False,
+            "status": "pending",
+            "retry_after": max(int(next_poll_at - now), 1),
+        }
+
+    interval = max(int(session.get("interval") or 5), 5)
+    session["next_poll_at"] = now + interval
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        response = await client.post(
+            "https://github.com/login/oauth/access_token",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "ccfoundry-agent-kit-dev-board",
+            },
+            data={
+                "client_id": str(session.get("client_id") or ""),
+                "device_code": str(session.get("device_code") or ""),
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            },
+        )
+
+    payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+    if not isinstance(payload, dict):
+        payload = {}
+    access_token = str(payload.get("access_token") or "").strip()
+    if access_token:
+        GITHUB_DEVICE_SESSIONS.pop(normalized_session_id, None)
+        github_identity = await _github_identity(access_token)
+        github_identity["token_source"] = "github_device_flow"
+        github_identity["has_token"] = True
+        return {
+            "ok": True,
+            "status": "authorized",
+            "foundry_url": str(session.get("foundry_url") or ""),
+            "github_token": access_token,
+            "github": github_identity,
+        }
+
+    error = str(payload.get("error") or "").strip()
+    if error == "authorization_pending":
+        return {
+            "ok": False,
+            "status": "pending",
+            "retry_after": interval,
+        }
+    if error == "slow_down":
+        interval += 5
+        session["interval"] = interval
+        session["next_poll_at"] = time.time() + interval
+        return {
+            "ok": False,
+            "status": "pending",
+            "retry_after": interval,
+            "message": "GitHub asked Dev Board to slow down polling.",
+        }
+
+    if error in {"expired_token", "access_denied", "incorrect_device_code"}:
+        GITHUB_DEVICE_SESSIONS.pop(normalized_session_id, None)
+        return {
+            "ok": False,
+            "status": error,
+            "message": str(payload.get("error_description") or error),
+        }
+
+    detail = str(payload.get("error_description") or error or "GitHub device login failed").strip()
+    raise HTTPException(status_code=502, detail=detail)
 
 
 @app.post("/api/developer/notification-preferences/sync")

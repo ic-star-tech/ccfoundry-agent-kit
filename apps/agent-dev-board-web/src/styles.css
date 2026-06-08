@@ -508,6 +508,49 @@ textarea {
   background: rgba(255, 255, 255, 0.88);
 }
 
+.device-login-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid rgba(42, 99, 255, 0.22);
+  border-radius: 18px;
+  background: var(--accent-soft);
+}
+
+.device-login-box p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.device-code {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 128px;
+  min-height: 46px;
+  border-radius: 14px;
+  background: var(--panel-solid);
+  color: var(--accent);
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+@media (max-width: 760px) {
+  .device-login-box {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .device-code,
+  .device-login-box .link-button {
+    width: 100%;
+  }
+}
+
 .notification-row {
   display: flex;
   align-items: center;
