@@ -20,7 +20,7 @@ An open-source framework for building agents that learn, evolve, and collaborate
 
 [![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/ic-star-tech/ccfoundry-agent-kit&cloudshell_git_branch=main&cloudshell_workspace=.&cloudshell_tutorial=tutorial.md&show=ide%2Cterminal)
 
-This opens Google Cloud Shell, clones the repository, and launches a guided tutorial with a runnable `deploy.sh` step. The script creates a Compute Engine VM from the public `ccfoundry-agent-kit` image, opens Dev Board ports `3000` and `8090`, attaches the `cloud-platform` OAuth scope, prepares a Dev Board service account when your Google account can manage IAM, and prints the Web UI URL.
+This opens Google Cloud Shell, clones the repository, and launches a guided tutorial with a project picker and a runnable `deploy.sh` step. The script creates a Compute Engine VM from the public `ccfoundry-agent-kit` image, opens Dev Board ports `3000` and `8090`, attaches the `cloud-platform` OAuth scope, prepares a Dev Board service account when your Google account can manage IAM, and prints a clickable Web UI URL in the terminal.
 
 By default it deploys to `us-central1-a` as `ccfoundry-dev-board`. To change the location or instance name, run the script manually:
 

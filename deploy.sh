@@ -26,6 +26,7 @@ SOURCE_RANGES="${CCFOUNDRY_SOURCE_RANGES:-0.0.0.0/0}"
 SERVICE_ACCOUNT_ID="${CCFOUNDRY_SERVICE_ACCOUNT_ID:-$SERVICE_ACCOUNT_ID_DEFAULT}"
 SETUP_SERVICE_ACCOUNT="${CCFOUNDRY_SETUP_SERVICE_ACCOUNT:-true}"
 DRY_RUN=false
+SERVICE_ACCOUNT_EMAIL=""
 
 usage() {
     cat <<'EOF'
@@ -119,6 +120,14 @@ gcloud_value() {
     gcloud "$@" 2>/dev/null || true
 }
 
+print_cyan() {
+    if [[ -t 1 ]]; then
+        printf '\033[1;36m%s\033[0m\n' "$*"
+    else
+        printf '%s\n' "$*"
+    fi
+}
+
 require_gcloud() {
     if ! command -v gcloud >/dev/null 2>&1; then
         fail "gcloud CLI is required. Run this from Google Cloud Shell or install the Google Cloud SDK."
@@ -133,8 +142,58 @@ resolve_project() {
         fi
     fi
     if [[ -z "$PROJECT_ID" ]]; then
-        fail "No Google Cloud project selected. Run: gcloud config set project <PROJECT_ID>"
+        prompt_for_project || true
     fi
+    if [[ -z "$PROJECT_ID" ]]; then
+        fail "No Google Cloud project selected. Use the tutorial project picker or run: gcloud config set project <PROJECT_ID>"
+    fi
+    if ! $DRY_RUN; then
+        gcloud config set project "$PROJECT_ID" >/dev/null 2>&1 || warn "Could not set gcloud's default project, but continuing with --project=$PROJECT_ID."
+    fi
+}
+
+prompt_for_project() {
+    local choice
+    local index
+    local projects=()
+
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        return 1
+    fi
+
+    log "No Google Cloud project is selected."
+    log "Fetching projects visible to your account..."
+    mapfile -t projects < <(gcloud projects list --format='value(projectId)' --sort-by=projectId --limit=50 2>/dev/null || true)
+
+    if ((${#projects[@]} > 0)); then
+        echo ""
+        echo "Available projects:"
+        for index in "${!projects[@]}"; do
+            printf "  %2d) %s\n" "$((index + 1))" "${projects[$index]}"
+        done
+        echo ""
+        echo "Enter a project number, paste a project ID, or press Ctrl+C to stop."
+    else
+        echo ""
+        echo "No projects were returned by gcloud projects list."
+        echo "Paste the project ID you want to use, or press Ctrl+C to stop."
+    fi
+
+    while [[ -z "$PROJECT_ID" ]]; do
+        read -r -p "Project: " choice
+        if [[ -z "$choice" ]]; then
+            continue
+        fi
+        if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#projects[@]})); then
+            PROJECT_ID="${projects[$((choice - 1))]}"
+        elif [[ "$choice" != *[[:space:]]* ]]; then
+            PROJECT_ID="$choice"
+        else
+            warn "Please enter a project number or project ID without spaces."
+        fi
+    done
+
+    log "Selected project: $PROJECT_ID"
 }
 
 enable_required_apis() {
@@ -431,8 +490,9 @@ main() {
     echo ""
     echo "CCFoundry Agent Dev Board is ready."
     echo ""
-    echo "Web UI:     $web_url"
-    echo "Health API: $health_url"
+    echo "Click the Web UI link below to open Dev Board:"
+    print_cyan "Web UI:     $web_url"
+    print_cyan "Health API: $health_url"
     echo ""
     echo "Instance:   $INSTANCE_NAME"
     echo "Zone:       $ZONE"
