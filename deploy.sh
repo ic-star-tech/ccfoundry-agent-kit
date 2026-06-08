@@ -422,11 +422,17 @@ main() {
     ip="$(wait_for_ip)" || fail "Could not read the VM external IP address."
     wait_for_dev_board "$ip"
 
+    local web_url="http://${ip}:3000"
+    local health_url="http://${ip}:8090/health"
+
+    printf '%s\n' "$web_url" > .ccfoundry-dev-board-url
+    printf '%s\n' "$health_url" > .ccfoundry-dev-board-health-url
+
     echo ""
     echo "CCFoundry Agent Dev Board is ready."
     echo ""
-    echo "Web UI:     http://${ip}:3000"
-    echo "Health API: http://${ip}:8090/health"
+    echo "Web UI:     $web_url"
+    echo "Health API: $health_url"
     echo ""
     echo "Instance:   $INSTANCE_NAME"
     echo "Zone:       $ZONE"
@@ -435,6 +441,8 @@ main() {
     echo "The VM was created with the cloud-platform OAuth scope. If Cloud Run deploys"
     echo "inside Dev Board still fail, check that the VM service account has Cloud Run,"
     echo "Artifact Registry, Cloud Scheduler, and service-account actAs permissions."
+    echo ""
+    echo "Web UI URL saved to .ccfoundry-dev-board-url"
 }
 
 main "$@"
