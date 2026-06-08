@@ -16,11 +16,7 @@ Board.
 ./deploy.sh && cat .ccfoundry-dev-board-url
 ```
 
-When deployment finishes, look at the Terminal. The final line is the clickable
-Web UI link for your Dev Board:
-
-`http://34.123.45.67:3000`
-
-Click the URL printed in your terminal to open CCFoundry Agent Dev Board.
+When deployment finishes, the Terminal prints the real Web UI URL as the final
+line. Click that final terminal URL to open CCFoundry Agent Dev Board.
 
 <walkthrough-conclusion-trophy></walkthrough-conclusion-trophy>
