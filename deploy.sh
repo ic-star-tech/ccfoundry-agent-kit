@@ -13,6 +13,7 @@ FIREWALL_RULE_DEFAULT="allow-ccfoundry-dev-board"
 SERVICE_ACCOUNT_ID_DEFAULT="ccfoundry-dev-board"
 
 PROJECT_ID="${CCFOUNDRY_PROJECT:-${GOOGLE_CLOUD_PROJECT:-}}"
+CREATE_PROJECT_ID="${CCFOUNDRY_CREATE_PROJECT:-}"
 IMAGE_PROJECT="${CCFOUNDRY_IMAGE_PROJECT:-$IMAGE_PROJECT_DEFAULT}"
 IMAGE_FAMILY="${CCFOUNDRY_IMAGE_FAMILY:-$IMAGE_FAMILY_DEFAULT}"
 INSTANCE_NAME="${CCFOUNDRY_INSTANCE_NAME:-$INSTANCE_NAME_DEFAULT}"
@@ -37,6 +38,7 @@ Usage:
 
 Options:
   --project <id>             Google Cloud project ID
+  --create-project <id>      Create and use a new Google Cloud project
   --zone <zone>              Compute Engine zone (default: us-central1-a)
   --instance-name <name>     VM instance name (default: ccfoundry-dev-board)
   --machine-type <type>      VM machine type (default: e2-standard-4)
@@ -48,6 +50,7 @@ Options:
 Environment variables with the CCFOUNDRY_ prefix can also override defaults,
 for example CCFOUNDRY_ZONE=asia-east2-a or CCFOUNDRY_INSTANCE_NAME=my-board.
 Use CCFOUNDRY_SOURCE_RANGES=<cidr> to restrict public Dev Board access.
+Use CCFOUNDRY_CREATE_PROJECT=<id> to create a new project before deployment.
 EOF
 }
 
@@ -55,6 +58,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --project)
             PROJECT_ID="$2"
+            shift 2
+            ;;
+        --create-project)
+            CREATE_PROJECT_ID="$2"
             shift 2
             ;;
         --zone)
@@ -134,7 +141,140 @@ require_gcloud() {
     fi
 }
 
+valid_project_id() {
+    [[ "$1" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]
+}
+
+project_billing_console_url() {
+    printf 'https://console.cloud.google.com/billing/linkedaccount?project=%s\n' "$1"
+}
+
+create_project() {
+    local new_project_id="$1"
+
+    if ! valid_project_id "$new_project_id"; then
+        warn "Project IDs must be 6-30 chars, start with a lowercase letter, and contain only lowercase letters, digits, and hyphens."
+        return 1
+    fi
+
+    log "Creating Google Cloud project $new_project_id..."
+    if $DRY_RUN; then
+        run gcloud projects create "$new_project_id" \
+            --name="CCFoundry Dev Board" \
+            --set-as-default \
+            --quiet
+    else
+        gcloud projects create "$new_project_id" \
+            --name="CCFoundry Dev Board" \
+            --set-as-default \
+            --quiet >/dev/null || return 1
+    fi
+
+    PROJECT_ID="$new_project_id"
+    log "Created project: $PROJECT_ID"
+}
+
+create_project_interactively() {
+    local new_project_id
+
+    echo ""
+    echo "Create a new Google Cloud project."
+    echo "The project ID must be globally unique, for example: ccfoundry-demo-$(date +%Y%m%d)"
+    read -r -p "New project ID (blank to cancel): " new_project_id
+
+    if [[ -z "$new_project_id" ]]; then
+        return 1
+    fi
+
+    create_project "$new_project_id"
+}
+
+select_billing_account() {
+    local account
+    local account_id
+    local choice
+    local display_name
+    local index
+    local billing_accounts=()
+
+    mapfile -t billing_accounts < <(gcloud billing accounts list \
+        --filter='open=true' \
+        --format='value(name,displayName)' 2>/dev/null || true)
+
+    if ((${#billing_accounts[@]} == 0)); then
+        return 1
+    fi
+
+    if ((${#billing_accounts[@]} == 1)); then
+        account="${billing_accounts[0]}"
+        BILLING_ACCOUNT_ID="${account%%$'\t'*}"
+        BILLING_ACCOUNT_ID="${BILLING_ACCOUNT_ID#billingAccounts/}"
+        return 0
+    fi
+
+    echo ""
+    echo "Available billing accounts:"
+    for index in "${!billing_accounts[@]}"; do
+        account="${billing_accounts[$index]}"
+        account_id="${account%%$'\t'*}"
+        display_name="${account#*$'\t'}"
+        printf "  %2d) %s  %s\n" "$((index + 1))" "${account_id#billingAccounts/}" "$display_name"
+    done
+    echo ""
+
+    while [[ -z "${BILLING_ACCOUNT_ID:-}" ]]; do
+        read -r -p "Billing account number (blank to skip): " choice
+        if [[ -z "$choice" ]]; then
+            return 1
+        fi
+        if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#billing_accounts[@]})); then
+            account="${billing_accounts[$((choice - 1))]}"
+            BILLING_ACCOUNT_ID="${account%%$'\t'*}"
+            BILLING_ACCOUNT_ID="${BILLING_ACCOUNT_ID#billingAccounts/}"
+        else
+            warn "Please enter one of the listed billing account numbers."
+        fi
+    done
+}
+
+ensure_project_billing() {
+    local billing_enabled
+
+    if $DRY_RUN; then
+        run gcloud billing projects describe "$PROJECT_ID"
+        return 0
+    fi
+
+    billing_enabled="$(gcloud billing projects describe "$PROJECT_ID" --format='value(billingEnabled)' 2>/dev/null || true)"
+    if [[ "$billing_enabled" == "True" ]]; then
+        return 0
+    fi
+
+    if [[ -z "$billing_enabled" ]]; then
+        warn "Could not confirm billing for project $PROJECT_ID. Continuing; VM creation will fail if billing is not enabled."
+        return 0
+    fi
+
+    warn "Billing is not enabled for project $PROJECT_ID."
+    BILLING_ACCOUNT_ID=""
+    if [[ -t 0 && -t 1 ]] && select_billing_account; then
+        log "Linking billing account $BILLING_ACCOUNT_ID to project $PROJECT_ID..."
+        if gcloud billing projects link "$PROJECT_ID" \
+            --billing-account="$BILLING_ACCOUNT_ID" \
+            --quiet >/dev/null; then
+            return 0
+        fi
+        warn "Could not link billing account automatically."
+    fi
+
+    fail "Billing is required to create the VM. Open $(project_billing_console_url "$PROJECT_ID"), enable billing, then run ./deploy.sh again."
+}
+
 resolve_project() {
+    if [[ -n "$CREATE_PROJECT_ID" ]]; then
+        create_project "$CREATE_PROJECT_ID" || fail "Could not create project $CREATE_PROJECT_ID. Try another globally unique project ID or create one in the Cloud Console."
+    fi
+
     if [[ -z "$PROJECT_ID" ]]; then
         PROJECT_ID="$(gcloud_value config get-value project)"
         if [[ "$PROJECT_ID" == "(unset)" ]]; then
@@ -172,11 +312,11 @@ prompt_for_project() {
             printf "  %2d) %s\n" "$((index + 1))" "${projects[$index]}"
         done
         echo ""
-        echo "Enter a project number, paste a project ID, or press Ctrl+C to stop."
+        echo "Enter a project number, paste a project ID, type 'new' to create one, or press Ctrl+C to stop."
     else
         echo ""
         echo "No projects were returned by gcloud projects list."
-        echo "Paste the project ID you want to use, or press Ctrl+C to stop."
+        echo "Paste the project ID you want to use, type 'new' to create one, or press Ctrl+C to stop."
     fi
 
     while [[ -z "$PROJECT_ID" ]]; do
@@ -184,12 +324,14 @@ prompt_for_project() {
         if [[ -z "$choice" ]]; then
             continue
         fi
-        if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#projects[@]})); then
+        if [[ "$choice" == "new" || "$choice" == "create" ]]; then
+            create_project_interactively || true
+        elif [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#projects[@]})); then
             PROJECT_ID="${projects[$((choice - 1))]}"
-        elif [[ "$choice" != *[[:space:]]* ]]; then
+        elif valid_project_id "$choice"; then
             PROJECT_ID="$choice"
         else
-            warn "Please enter a project number or project ID without spaces."
+            warn "Please enter a project number, a valid project ID, or 'new'."
         fi
     done
 
@@ -451,6 +593,7 @@ main() {
 
     require_gcloud
     resolve_project
+    ensure_project_billing
     region="${ZONE%-*}"
 
     log "Deploying CCFoundry Agent Dev Board"

@@ -9,6 +9,9 @@ required because the deploy script creates a Compute Engine VM.
 
 <walkthrough-project-setup billing="true"></walkthrough-project-setup>
 
+If you do not have a suitable project yet, use the "Create a new project" link
+above. You can also type `new` in the Terminal project prompt.
+
 Then click the button on the code block below to deploy CCFoundry Agent Dev
 Board.
 
