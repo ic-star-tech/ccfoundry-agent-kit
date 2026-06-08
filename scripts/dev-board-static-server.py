@@ -8,7 +8,7 @@ from pathlib import Path
 
 class DevBoardStaticHandler(SimpleHTTPRequestHandler):
     def end_headers(self) -> None:
-        request_path = self.path.split("?", 1)[0]
+        request_path = getattr(self, "path", "").split("?", 1)[0]
         if request_path in {"", "/", "/index.html"}:
             self.send_header("Cache-Control", "no-store, max-age=0")
             self.send_header("Pragma", "no-cache")
