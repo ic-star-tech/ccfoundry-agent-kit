@@ -16,6 +16,20 @@ An open-source framework for building agents that learn, evolve, and collaborate
   <strong>📺 Demo Video:</strong> <a href="https://youtu.be/qok2V0zUF_A">Watch the Skill-to-Earn architecture walkthrough on YouTube</a>
 </p>
 
+## 1-Click Dev Board on Google Cloud
+
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/ic-star-tech/ccfoundry-agent-kit&cloudshell_git_branch=main&cloudshell_workspace=.&cloudshell_tutorial=tutorial.md&show=ide%2Cterminal)
+
+This opens Google Cloud Shell, clones the repository, and launches a guided tutorial with a runnable `deploy.sh` step. The script creates a Compute Engine VM from the public `ccfoundry-agent-kit` image, opens Dev Board ports `3000` and `8090`, attaches the `cloud-platform` OAuth scope, prepares a Dev Board service account when your Google account can manage IAM, and prints the final Dev Board URL.
+
+By default it deploys to `us-central1-a` as `ccfoundry-dev-board`. To change the location or instance name, run the script manually:
+
+```bash
+CCFOUNDRY_ZONE=asia-east2-a CCFOUNDRY_INSTANCE_NAME=my-dev-board ./deploy.sh
+```
+
+The default firewall rule allows public access for demo convenience. To restrict it, set `CCFOUNDRY_SOURCE_RANGES` before running the script.
+
 ## The Idea
 
 **An agent that grows.** Your agent has a durable `agent_space/` — a private home for its soul, knowledge, skills, and reflections. Through every conversation the agent refines what it knows and evolves its behavior. This is not model fine-tuning — it is a living memory layer.
