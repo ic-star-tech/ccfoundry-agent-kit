@@ -27,20 +27,24 @@
   },
   "files": [
     "README.md",
+    "CHANGELOG.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
     "LICENSE",
     "Dockerfile.cloudrun",
     "scripts/dev-board.mjs",
+    "scripts/dev-board-deps.mjs",
     "scripts/deploy-cloudrun.sh",
     "packages/python-sdk/pyproject.toml",
     "packages/python-sdk/README.md",
+    "packages/python-sdk/LICENSE",
     "packages/python-sdk/src/ccfoundry_agent_kit/",
     "examples/me_agent/.env.example",
     "examples/me_agent/README.md",
     "examples/me_agent/pyproject.toml",
     "examples/me_agent/agent_space/",
     "examples/me_agent/src/me_agent_example/",
+    "examples/verilog_module_writer/agent_space/",
     "apps/agent-dev-board-api/pyproject.toml",
     "apps/agent-dev-board-api/README.md",
     "apps/agent-dev-board-api/src/agent_dev_board_api/",
@@ -68,6 +72,7 @@
   "scripts": {
     "dev-board": "node scripts/dev-board.mjs",
     "dev-board:lan": "node scripts/dev-board.mjs --host 0.0.0.0",
-    "pack:dry-run": "npm pack --dry-run"
+    "pack:dry-run": "npm pack --dry-run",
+    "test:launcher": "node --test tests/launcher/*.test.mjs"
   }
 }

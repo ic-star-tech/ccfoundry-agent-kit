@@ -1,0 +1,7 @@
+{
+  "name": "ccfoundry-dev-board-browser-tests",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node local-foundry-login.mjs && node customer-project.mjs" },
+  "devDependencies": { "@playwright/test": "1.61.1" }
+}

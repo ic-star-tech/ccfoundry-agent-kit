@@ -224,6 +224,8 @@ DEPLOY_ARGS=(
     --region="$GCP_REGION"
     --image="$IMAGE_TAG"
     --platform=managed
+    --no-allow-unauthenticated
+    --invoker-iam-check
     --port=8080
     --memory="$MEMORY"
     --cpu="$CPU"
@@ -231,6 +233,7 @@ DEPLOY_ARGS=(
     --max-instances=5
     --timeout=300
     --set-env-vars="AGENT_DEPLOY_MODE=cloud_run"
+    --set-env-vars="FOUNDRY_POLL_AUTH_MODE=platform"
     --set-env-vars="ME_AGENT_NAME=${AGENT_NAME}"
     --set-env-vars="ME_AGENT_BASE_DIR=/app"
     --set-env-vars="FOUNDRY_DISCOVERY_ENABLE=true"

@@ -10,6 +10,21 @@ The Python SDK is the agent-facing part of the stack. It helps a self-hosted age
 - receive runtime model policy and resources
 - consume a Foundry-provided sandbox control plane when the execution contract requires `foundry_sandbox`
 
+## Installation and compatibility
+
+This checkout identifies the SDK as `0.1.0`. It is a source candidate, not an
+announcement of a PyPI release. Until a verified public release is available,
+install from a reviewed checkout with `python -m pip install ./packages/python-sdk`
+or from its verified wheel. Python 3.10 and 3.12 are covered by CI; runtime imports
+currently require a POSIX host (including `fcntl`/`pty`), so Windows support is not
+claimed merely because the wheel has a `py3-none-any` tag.
+
+Foundry compatibility is **contract-based and not yet certified as a server
+version range**. The server's `2.0.0` application label alone does not distinguish
+its API revisions. Pin the tested Foundry commit/image digest with the SDK
+artifact. See the [compatibility and release procedure](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/releases.md)
+for required contracts, evidence and deprecation policy.
+
 ## Main exports
 
 - `AgentManifest`
@@ -28,6 +43,12 @@ The Python SDK is the agent-facing part of the stack. It helps a self-hosted age
 - `POST /chat`
 - `POST /api/chat`
 - `GET /.well-known/agent-card.json`
+
+`/api/chat` returns JSON by default; send `stream: true` for SSE. Configuring
+`AGENT_SECRET` protects chat and workspace operations with bearer authentication.
+Use `AgentClient(base_url, agent_secret=secret)` for authenticated calls; see
+[SDK authentication](../../docs/sdk.md#agent-authentication) for bootstrap and
+deployment details.
 
 When `FoundryBootstrap` is enabled, the app also exposes:
 
@@ -105,5 +126,10 @@ response = await client.chat.completions.create(
 
 See:
 
-- [SDK Guide](../../docs/sdk.md)
-- [Foundry Onboarding](../../docs/foundry-onboarding.md)
+- [SDK Guide](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/sdk.md)
+- [Foundry Onboarding](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/foundry-onboarding.md)
+
+
+## MCP tools
+
+The SDK includes `FoundryMCPRuntime` and layered `FoundryMCPError`. The example consumes approved Foundry assignments and can explicitly enable agent-owned configuration; its model loop is bounded and preserves tool receipts. See [MCP runtime](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/mcp-runtime.md) for setup, tests, limitations and deployment acceptance.

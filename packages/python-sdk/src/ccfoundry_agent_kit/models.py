@@ -101,6 +101,8 @@ class ChatResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     reply: str
+    model: str = ""
+    usage: dict[str, Any] = Field(default_factory=dict)
     notes_update: str = ""
     status: str = "ok"
     command: str = ""

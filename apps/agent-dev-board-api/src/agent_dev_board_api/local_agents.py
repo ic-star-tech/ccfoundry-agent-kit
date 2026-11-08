@@ -8,12 +8,17 @@ import signal
 import socket
 import subprocess
 import time
+import threading
+import tempfile
+from functools import wraps
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from .projects import configured_projects, load_project, project_id
 
 _APP_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_\.]*:[A-Za-z_][A-Za-z0-9_]*$")
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -40,6 +45,10 @@ def _is_pid_running(pid: int | None) -> bool:
     if not pid or pid <= 0:
         return False
     try:
+        # A stopped child may remain a zombie until its parent reaps it.
+        proc = Path(f"/proc/{pid}/stat")
+        if proc.exists() and proc.read_text().rsplit(")", 1)[1].split()[0] == "Z":
+            return False
         os.kill(pid, 0)
     except OSError:
         return False
@@ -74,6 +83,22 @@ def _pick_port(host: str, preferred_port: int, reserved: set[int]) -> int:
     raise RuntimeError(f"Could not find a free port starting from {preferred_port}")
 
 
+def _registry_operation(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.registry_lock:
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
+def _runtime_operation(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.containers.lock:
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
 class LocalAgentManager:
     def __init__(
         self,
@@ -82,11 +107,16 @@ class LocalAgentManager:
         runtime_dir: Path,
         agents_file: Path,
         venv_python: Path,
+        projects: list[Path] | None = None,
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.runtime_dir = runtime_dir.resolve()
         self.agents_file = agents_file.resolve()
         self.venv_python = venv_python.expanduser()
+        self.project_roots = {project_id(p): p.resolve(strict=True) for p in (configured_projects() if projects is None else projects)}
+        self.registry_lock = threading.RLock()
+        self.children: dict[int, subprocess.Popen] = {}
+        self._containers = None
         self.registry_path = self.runtime_dir / "local_agents.json"
         self.instances_dir = self.runtime_dir / "agents"
         self.templates = {
@@ -110,6 +140,14 @@ class LocalAgentManager:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.instances_dir.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def containers(self):
+        with self.registry_lock:
+            if self._containers is None:
+                from .project_containers import ProjectContainers
+                self._containers = ProjectContainers(self)
+            return self._containers
+
     def _validated_repo_path(self, value: Any, *, field_name: str) -> Path:
         candidate = Path(str(value or "")).expanduser().resolve(strict=False)
         if not candidate.exists():
@@ -120,6 +158,8 @@ class LocalAgentManager:
 
     def _validated_template(self, template_id: str) -> dict[str, Any]:
         template = dict(self._template(template_id))
+        if template.get("kind") == "project":
+            return template
         template["agent_space_dir"] = self._validated_repo_path(
             template.get("agent_space_dir"),
             field_name="Template agent space",
@@ -191,6 +231,7 @@ class LocalAgentManager:
             self._save_registry({"agents": []})
         self._sync_agents_file()
 
+    @_registry_operation
     def _load_registry(self) -> dict[str, Any]:
         if not self.registry_path.exists():
             return {"agents": []}
@@ -213,12 +254,17 @@ class LocalAgentManager:
             self._save_registry(payload)
         return payload
 
+    @_registry_operation
     def _save_registry(self, payload: dict[str, Any]) -> None:
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        self.registry_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.runtime_dir, delete=False) as output:
+            temporary = Path(output.name)
+            try:
+                output.write(json.dumps(payload, ensure_ascii=False, indent=2))
+                output.flush()
+                os.replace(temporary, self.registry_path)
+            finally:
+                temporary.unlink(missing_ok=True)
 
     def _sync_agents_file(self) -> None:
         registry = self._load_registry()
@@ -244,18 +290,35 @@ class LocalAgentManager:
         )
 
     def list_templates(self) -> list[dict[str, str]]:
+        projects = []
+        for identity, root in self.project_roots.items():
+            try:
+                projects.append(load_project(root))
+            except (ValueError, OSError):
+                projects.append({"id": identity, "kind": "project", "label": root.name + " (configuration unavailable)", "description": "Repair ccfoundry.project.json before creating or building this source", "project_root": root})
         return [
             {
                 "id": value["id"],
                 "label": value["label"],
                 "description": value["description"],
+                "kind": str(value.get("kind") or "template"),
+                "project_path": str(value.get("project_root") or ""),
+                "app_module": str(value.get("app_module") or ""),
             }
-            for value in self.templates.values()
+            for value in [*self.templates.values(), *projects]
         ]
 
     def _refresh_agent_state(self, item: dict[str, Any]) -> dict[str, Any]:
         try:
-            item, _ = self._validated_runtime_item(item)
+            if item.get("template_id") in self.project_roots:
+                # Runtime ownership outlives a source edit or deletion. Keep
+                # stop available without importing or re-reading its app.
+                item["instance_dir"] = str(self._validated_instance_dir(item))
+                item["host"] = self._validated_runtime_host(item)
+                item["port"] = self._validated_runtime_port(item)
+                item["base_url"] = f'http://{item["host"]}:{item["port"]}'
+            else:
+                item, _ = self._validated_runtime_item(item)
         except Exception:
             normalized_name = _slugify(item.get("name")) or "invalid_local_agent"
             try:
@@ -272,6 +335,14 @@ class LocalAgentManager:
             item["status"] = "invalid"
             item["pid"] = None
             return item
+        if item.get("status") == "retired":
+            return item
+        if item.get("runtime_kind") == "container":
+            try:
+                item["status"] = self.containers.status(item)
+            except RuntimeError:
+                item["status"] = "unknown"
+            return item
         pid = int(item.get("pid") or 0) or None
         status = str(item.get("status") or "").strip().lower() or "stopped"
         if status == "running" and not _is_pid_running(pid):
@@ -282,6 +353,7 @@ class LocalAgentManager:
             item["pid"] = None
         return item
 
+    @_registry_operation
     def list_agents(self, *, include_retired: bool = False) -> list[dict[str, Any]]:
         registry = self._load_registry()
         changed = False
@@ -312,7 +384,9 @@ class LocalAgentManager:
                 return registry, refreshed
         raise ValueError(f"Unknown local agent '{name}'")
 
+    @_registry_operation
     def _replace_agent(self, registry: dict[str, Any], updated: dict[str, Any]) -> None:
+        registry = self._load_registry()
         normalized = _slugify(updated.get("name"))
         items: list[dict[str, Any]] = []
         replaced = False
@@ -332,6 +406,11 @@ class LocalAgentManager:
         return self.instances_dir / _slugify(name)
 
     def _template(self, template_id: str) -> dict[str, Any]:
+        if template_id in self.project_roots:
+            try:
+                return load_project(self.project_roots[template_id])
+            except OSError as exc:
+                raise ValueError("Customer project files are unavailable; repair the registered project before starting or building it") from exc
         template = self.templates.get(str(template_id or "").strip())
         if not template:
             raise ValueError(f"Unknown template '{template_id}'")
@@ -364,20 +443,22 @@ class LocalAgentManager:
     def _write_env_file(self, item: dict[str, Any]) -> Path:
         instance_dir = self._validated_instance_dir(item)
         env_path = instance_dir / ".env"
-        foundry_url = str(item.get("foundry_url") or "").strip()
-        lines = [
-            f"ME_AGENT_NAME={item['name']}",
-            f"ME_AGENT_LABEL={item['label']}",
-            f"FOUNDRY_AGENT_SOURCE_ID={item['source_id']}",
-            "FOUNDRY_DISCOVERY_ENABLE=true",
-            f"FOUNDRY_BASE_URL={foundry_url}",
-            f"FOUNDRY_AGENT_PUBLIC_URL={item['base_url']}",
-            "FOUNDRY_RUNTIME_TRANSPORT=pull",
-            "FOUNDRY_BOOTSTRAP_DELIVERY=poll",
-            f"FOUNDRY_BOOTSTRAP_STATE_PATH={instance_dir / '.foundry_bootstrap.json'}",
-        ]
-        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        values = self.runtime_environment(item)
+        env_path.write_text("\n".join(f"{key}={json.dumps(value)}" for key, value in values.items()) + "\n", encoding="utf-8")
+        env_path.chmod(0o600)
         return env_path
+
+    def runtime_environment(self, item: dict[str, Any]) -> dict[str, str]:
+        instance_dir = self._validated_instance_dir(item)
+        return {
+            "ME_AGENT_NAME": item["name"], "ME_AGENT_LABEL": item["label"],
+            "ME_AGENT_BASE_DIR": str(instance_dir), "CCFOUNDRY_AGENT_BASE_DIR": str(instance_dir),
+            "FOUNDRY_AGENT_SOURCE_ID": item["source_id"], "FOUNDRY_DISCOVERY_ENABLE": "true",
+            "FOUNDRY_BASE_URL": str(item.get("foundry_url") or ""),
+            "FOUNDRY_AGENT_PUBLIC_URL": item["base_url"], "FOUNDRY_RUNTIME_TRANSPORT": "pull",
+            "FOUNDRY_BOOTSTRAP_DELIVERY": "poll",
+            "FOUNDRY_BOOTSTRAP_STATE_PATH": str(instance_dir / ".foundry_bootstrap.json"),
+        }
 
     def _spawn_agent(self, item: dict[str, Any]) -> dict[str, Any]:
         item, template = self._validated_runtime_item(item)
@@ -386,22 +467,23 @@ class LocalAgentManager:
         logs_dir.mkdir(parents=True, exist_ok=True)
         log_path = logs_dir / "agent.log"
         env_path = self._write_env_file(item)
-        # Use the validated template app_dir (already confirmed within repo_root
-        # by _validated_repo_path) rather than re-resolving the raw template value.
-        validated_app_dir = self._validated_repo_path(
+        custom = template.get("kind") == "project"
+        validated_app_dir = template["app_dir"] if custom else self._validated_repo_path(
             template["app_dir"], field_name="Template app dir",
         )
-        pythonpath_entries = [
-            str(validated_app_dir),
-            str((self.repo_root / "packages" / "python-sdk" / "src").resolve()),
-        ]
-        existing_pythonpath = os.environ.get("PYTHONPATH", "").strip()
-        if existing_pythonpath:
-            pythonpath_entries.append(existing_pythonpath)
+        python = Path(template["python"]) if custom else self.venv_python
+        if custom and (not python.is_file() or not os.access(python, os.X_OK)):
+            raise RuntimeError("Prepare the project's declared Python environment before starting it")
+        pythonpath_entries = [str(validated_app_dir)]
+        if not custom:
+            pythonpath_entries.append(str((self.repo_root / "packages" / "python-sdk" / "src").resolve()))
+            existing_pythonpath = os.environ.get("PYTHONPATH", "").strip()
+            if existing_pythonpath:
+                pythonpath_entries.append(existing_pythonpath)
         log_handle = log_path.open("ab")
         process = subprocess.Popen(
             [
-                str(self.venv_python),
+                str(python),
                 "-m",
                 "uvicorn",
                 str(template["app_module"]),
@@ -412,12 +494,12 @@ class LocalAgentManager:
                 "--port",
                 str(item.get("port")),
             ],
-            cwd=str(self.repo_root),
+            cwd=str(template["project_root"] if custom else self.repo_root),
             env={
                 **os.environ,
-                "ME_AGENT_BASE_DIR": str(instance_dir),
-                "VIRTUAL_ENV": str(self.venv_python.parent.parent),
-                "PATH": f"{self.venv_python.parent}:{os.environ.get('PATH', '')}",
+                **self.runtime_environment(item),
+                "VIRTUAL_ENV": str(python.parent.parent),
+                "PATH": f"{python.parent}:{os.environ.get('PATH', '')}",
                 "PYTHONNOUSERSITE": "1",
                 "PYTHONPATH": os.pathsep.join(entry for entry in pythonpath_entries if entry),
             },
@@ -426,6 +508,7 @@ class LocalAgentManager:
             start_new_session=True,
         )
         log_handle.close()
+        self.children[process.pid] = process
         item["pid"] = process.pid
         item["status"] = "running"
         item["env_path"] = str(env_path)
@@ -433,6 +516,7 @@ class LocalAgentManager:
         item["started_at"] = _utcnow_iso()
         return item
 
+    @_registry_operation
     def create_agent(
         self,
         *,
@@ -474,6 +558,9 @@ class LocalAgentManager:
             "name": normalized_name,
             "label": str(label or "").strip() or _display_label(normalized_name),
             "template_id": template["id"],
+            "source_kind": str(template.get("kind") or "template"),
+            "project_path": str(template.get("project_root") or ""),
+            "app_module": str(template["app_module"]),
             "host": "127.0.0.1",
             "port": port,
             "base_url": f"http://127.0.0.1:{port}",
@@ -492,14 +579,24 @@ class LocalAgentManager:
         self._sync_agents_file()
         return item
 
+    @_runtime_operation
     def start_agent(self, name: str) -> dict[str, Any]:
         registry, item = self._find_agent(name)
+        if item.get("status") == "retired":
+            raise ValueError("Retired local agent names cannot be restarted")
         if item.get("status") == "running" and _is_pid_running(int(item.get("pid") or 0)):
             return item
+        if item.get("runtime_kind") == "container":
+            if self.containers.status(item) == "running":
+                raise ValueError("Stop the container before starting local Python debug")
+            self.containers.stop(name)
+            registry, item = self._find_agent(name)
+        item["runtime_kind"] = "process"
         item = self._spawn_agent(item)
         self._replace_agent(registry, item)
         return item
 
+    @_runtime_operation
     def retire_agent(self, name: str, *, remote_result: dict[str, Any] | None = None) -> dict[str, Any]:
         stopped = self.stop_agent(name)
         registry, item = self._find_agent(str(stopped.get("name") or name))
@@ -516,8 +613,11 @@ class LocalAgentManager:
         self._replace_agent(registry, item)
         return item
 
+    @_runtime_operation
     def stop_agent(self, name: str) -> dict[str, Any]:
         registry, item = self._find_agent(name)
+        if item.get("runtime_kind") == "container":
+            return self.containers.stop(name)
         pid = int(item.get("pid") or 0)
         if pid > 0 and _is_pid_running(pid):
             try:
@@ -536,6 +636,9 @@ class LocalAgentManager:
                     except Exception:
                         pass
                 _wait_for_pid_exit(pid, timeout_seconds=2.0)
+        child = self.children.pop(pid, None)
+        if child is not None:
+            child.wait(timeout=3)
         item["pid"] = None
         item["status"] = "stopped"
         item["stopped_at"] = _utcnow_iso()

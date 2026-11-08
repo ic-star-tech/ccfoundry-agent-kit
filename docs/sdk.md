@@ -62,7 +62,39 @@ The generated app exposes the portable core plus default SDK helpers:
 
 `POST /chat` is the plain JSON compatibility endpoint.
 
-`POST /api/chat` is the Foundry-facing SSE endpoint. It emits `step`, `token`, `message`, `error`, and `done` events.
+`POST /api/chat` returns JSON when `stream` is false or omitted. The response
+includes `reply`, `model` and `usage`; handlers should supply the actual model
+and token usage when known (defaults are an empty model and usage object).
+With `stream: true` it emits the SSE events `step`, `token`, `message`, `error`,
+and `done`. Each request invokes the handler once in either mode.
+
+### Agent authentication
+
+Setting `AGENT_SECRET` enables bearer authentication on operational HTTP and
+WebSocket routes, including chat, workspace, reflections and polling. The SDK
+also reads secrets delivered or rotated through `FoundryBootstrap` live state.
+Missing/incorrect bearer headers receive 401; duplicate Authorization headers
+are rejected. Removing or clearing a configured secret does not reopen the app.
+
+Health, manifest, discovery card and the sanitized bootstrap state remain public
+read endpoints. Invite/approval callbacks keep their `X-Foundry-Bootstrap-Token`
+checks, and developer-claim updates keep their local-caller restriction.
+
+`platform_authenticated_poll=True` delegates **only** `POST /foundry/poll` to an
+authenticating deployment platform. Use it only behind an enforced identity gate;
+it does not verify OIDC tokens in Python. The Cloud Run deployment script enables
+this for Scheduler OIDC and explicitly enables the invoker IAM check while
+disallowing unauthenticated access. Other operational routes still require the
+agent bearer. The default remains agent bearer authentication for polling too.
+
+Local development without any configured secret stays unauthenticated. Set
+`require_agent_secret=True` in `create_agent_app(...)` to deny operations until a
+secret is available. Native PTY access always requires a valid bearer.
+
+Use `AgentClient(base_url, agent_secret=secret)` to call a protected agent.
+`stream_foundry_chat` explicitly requests streaming and only falls back to
+`/chat` on 404/405. Authentication errors, server errors, malformed responses,
+timeouts and broken streams propagate without executing the handler again.
 
 When `FoundryBootstrap` is enabled, the SDK also mounts the bootstrap callback surfaces documented below. When native terminal access is explicitly enabled, it can additionally mount `GET /pty` via WebSocket.
 
@@ -231,3 +263,27 @@ In that model:
 - the agent keeps its private `agent_space`
 - Foundry owns the task workspace and shell execution surface
 - the agent does not need native host terminal access
+
+## Version, Errors And Schemas
+
+`ccfoundry_agent_kit.__version__` is the single source of the SDK version (`pyproject.toml` reads it). The bootstrap sends it to Foundry as `x_foundry.system_manifest.sdk_version` and `profile_metadata.sdk_version`, so the server can tell which SDK an agent runs.
+
+Calls from the SDK to Foundry (bootstrap, pull runtime, sandbox client) raise structured errors for non-2xx responses:
+
+| Exception | When |
+|---|---|
+| `FoundryAuthError` | HTTP 401 / 403 |
+| `FoundryNotFoundError` | HTTP 404 |
+| `FoundryRateLimitError` | HTTP 429 (`retry_after` from `Retry-After`) |
+| `FoundryServerError` | HTTP 5xx |
+| `FoundryHTTPStatusError` | any other non-2xx, and the base of the classes above |
+
+All of them derive from `FoundryAPIError` (with `method`, `path`, `status_code`, `response_excerpt`) and from `httpx.HTTPStatusError`, so existing `except httpx.HTTPStatusError` code keeps working. Network failures are still `httpx` transport errors.
+
+`FoundryBootstrap.state.last_error` keeps its stable code as a prefix and appends what failed, for example `bootstrap_register_failed: HTTP 410 POST /api/registry/register: invite expired` or `bootstrap_discovery_failed: ConnectError`.
+
+The JSON Schemas in `schemas/` are generated from the pydantic models; a test fails when they drift. Regenerate after changing `models.py`:
+
+```bash
+PYTHONPATH=packages/python-sdk/src python -m ccfoundry_agent_kit.schemas schemas/
+```

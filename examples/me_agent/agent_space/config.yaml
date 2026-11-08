@@ -6,7 +6,7 @@ prompt_file: /app/agent_space/SOUL.md
 notes_file: /app/agent_space/notes.md
 journal_file: /app/agent_space/journal.md
 task_file: /app/agent_space/task.md
-mcp_file: /app/agent_space/mcp_servers.yaml
+mcp_file: agent_space/mcp_servers.yaml
 workspace_dir: /app/workspace
 capabilities:
   - chat

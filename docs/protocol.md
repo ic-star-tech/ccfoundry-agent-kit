@@ -58,7 +58,9 @@ Response:
 
 ### `POST /api/chat`
 
-This is the default Foundry-facing SSE surface around the same chat handler. It accepts a Foundry-style payload, normalizes it into `ChatRequest`, and streams events such as:
+This accepts a Foundry-style payload and normalizes it into `ChatRequest`.
+When `stream` is false or absent it returns a JSON `ChatResponse`, including
+`reply`, `model` and `usage`. Set `stream: true` to receive SSE events:
 
 - `step`
 - `token`

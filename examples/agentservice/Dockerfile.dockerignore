@@ -1,0 +1,23 @@
+# Build-context filter for examples/agentservice/Dockerfile (BuildKit reads
+# <Dockerfile>.dockerignore). Paths are relative to the repository root.
+
+# Local runtime state of me_agent: bootstrap secrets, notes, reflections.
+examples/me_agent/agent_space/runtime
+examples/me_agent/agent_space/.foundry_bootstrap*.json
+examples/me_agent/agent_space/reflections/*.jsonl
+examples/me_agent/workspace
+examples/me_agent/.env
+
+# Never ship credentials or caches.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+.git
+.venv
+.dev-board
+node_modules
+apps

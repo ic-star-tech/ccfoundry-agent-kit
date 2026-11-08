@@ -102,41 +102,19 @@ assert verify_mandate(mandate, mandate["signature"], agent_secret)
 
 [MCP](https://modelcontextprotocol.io) (Model Context Protocol) is an open standard from Anthropic that defines how AI agents connect to tools, data sources, and external services. If A2A is how agents talk to each other, MCP is how agents talk to their toolbox.
 
-### Current Boundary In This Repo
+### Runtime and configuration
 
-The repository is MCP-aware at the manifest and configuration layer, but it does not yet ship a built-in MCP runtime.
+`FoundryMCPRuntime` uses the official MCP Python SDK for Streamable HTTP,
+stdio and legacy SSE sessions. `manifest.mcp.accepts_foundry_mcp` enables
+approved Foundry resource refresh; `manifest.mcp.has_own_mcp` explicitly enables
+agent-owned `mcp_file` loading in the example. Managed and owned namespaces stay
+separate, and changed grants are checked before calls.
 
-Today the SDK and example agent expose:
-
-- `manifest.mcp.accepts_foundry_mcp`
-- `manifest.mcp.has_own_mcp`
-- `agent_space/config.yaml` pointing at an `mcp_file` such as `agent_space/mcp_servers.yaml`
-
-Those values are published so Foundry can inspect the agent's MCP posture during discovery and onboarding.
-
-The SDK does not yet provide:
-
-- a built-in MCP client
-- automatic loading and execution of `mcp_servers.yaml`
-- a Streamable HTTP or stdio MCP transport implementation
-
-### Transport Direction
-
-When runtime MCP support is added, the intended network direction is to align with the current MCP transport model rather than inventing a Foundry-specific tool protocol. That means Streamable HTTP is the likely fit for network transport, but this repo does not expose that transport today.
-
-### MCP Configuration
-
-The repo uses `agent_space/mcp_servers.yaml` as a conventional location for MCP server entries:
-
-```yaml
-# Managed by the agent or Foundry registry sync.
-servers: {}
-```
-
-Right now that file is agent-owned configuration. The SDK does not automatically read it into a live MCP client session.
-
-
-
+`me_agent` passes the discovered tool definitions to its model, sends correlated
+tool results back, and bounds tool rounds. Errors remain explicit; it does not
+invent a successful tool-backed answer after a failed call. See
+[MCP runtime](mcp-runtime.md) for configuration, lifecycle, limits, error layers,
+contract validation and live deployment acceptance.
 
 ## OpenAI Chat Completions — Model Interface
 
@@ -223,8 +201,8 @@ This gives callers real-time visibility into execution progress, not just the fi
 │   └─────────────────────────────────────────────────┘  │
 │                                                         │
 │   ┌─────────────────────────────────────────────────┐  │
-│   │  MCP Declarations / Config Hooks                │  │
-│   │  (manifest fields + mcp_servers.yaml)           │  │
+│   │  MCP Sessions / Tool Calls                      │  │
+│   │  (managed grants + owned config)                │  │
 │   └─────────────────────────────────────────────────┘  │
 │                                                         │
 │   ┌─────────────────────────────────────────────────┐  │
@@ -238,8 +216,8 @@ The key insight is that these protocols handle different layers:
 
 - **A2A** handles agent identity and discovery
 - **AP2** handles payment mandates and settlement verification
-- **MCP** is represented today as manifest/config declarations for future tool integration
+- **MCP** connects approved or explicitly agent-owned tools to a bounded runtime
 - **OpenAI Completions** handles model access
 - **SSE** handles real-time streaming
 
-They compose naturally because they operate at different levels of the stack. In the current implementation, A2A, AP2, SSE, and OpenAI-compatible model calls are live runtime surfaces, while MCP remains a declaration-level boundary until runtime support lands.
+They compose naturally because they operate at different levels of the stack. A2A, AP2, SSE, compatible model calls and MCP sessions are implemented runtime surfaces; actual deployment acceptance remains separate from source and fixture validation.

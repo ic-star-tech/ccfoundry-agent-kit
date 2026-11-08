@@ -382,5 +382,3 @@ Foundry aggregates resource costs by invocation_id:
     ↓ Settlement mandate is signed and delivered to agent
 ```
 
-See [Resource Cost Accounting Plan](resource-cost-accounting-plan.md) for
-full details.

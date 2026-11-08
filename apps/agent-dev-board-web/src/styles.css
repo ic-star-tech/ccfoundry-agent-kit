@@ -1131,3 +1131,8 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+
+.project-container-panel { margin-top: 1.5rem; border-top: 1px solid var(--border, #ddd); padding-top: 1rem; }
+.project-container-panel code, .project-build-receipt dd { overflow-wrap: anywhere; }
+.project-build-receipt dt { color: var(--muted, #666); margin-top: .6rem; }
+.project-build-receipt dd { margin-left: 0; }

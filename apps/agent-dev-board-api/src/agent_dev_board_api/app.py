@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from ccfoundry_agent_kit import AgentClient, ChatRequest, ContextMode
 from agent_dev_board_api.cloud_run import DEFAULT_CLOUD_RUN_REGION, CloudRunManager
 from agent_dev_board_api.local_agents import LocalAgentManager
+from agent_dev_board_api.foundry_login import FoundrySessions, foundry_http_client, login_to_foundry
 from agent_dev_board_api.skill_store import SkillStore
 
 
@@ -33,6 +34,7 @@ RUNTIME_DIR = AGENTS_FILE.parent
 VENV_PYTHON = Path(os.getenv("CCFOUNDRY_DEV_VENV_PYTHON", str(REPO_ROOT / ".venv" / "bin" / "python"))).expanduser()
 TRANSCRIPTS: dict[str, list[dict[str, str]]] = {}
 GITHUB_DEVICE_SESSIONS: dict[str, dict[str, Any]] = {}
+FOUNDRY_SESSIONS = FoundrySessions()
 logger = logging.getLogger(__name__)
 SKILL_STORE = SkillStore()
 
@@ -111,9 +113,12 @@ class LiteHandshakeProbeRequest(BaseModel):
 
 class DeveloperContextRequest(BaseModel):
     foundry_url: str = ""
+    auth_method: str = "foundry"
 
 
 class DeveloperBootstrapTicketRequest(BaseModel):
+    auth_method: str = ""
+    foundry_session_id: str = ""
     agent_name: str
     foundry_url: str = ""
     developer_token: str = ""
@@ -124,6 +129,8 @@ class DeveloperBootstrapTicketRequest(BaseModel):
 
 
 class DeveloperNotificationPreferencesSyncRequest(BaseModel):
+    auth_method: str = ""
+    foundry_session_id: str = ""
     agent_name: str
     foundry_url: str = ""
     developer_token: str = ""
@@ -138,12 +145,22 @@ class DeveloperGithubDeviceStartRequest(BaseModel):
 
 
 class LocalAgentTemplate(BaseModel):
+    kind: str = "template"
+    project_path: str = ""
+    app_module: str = ""
     id: str
     label: str
     description: str
 
 
 class LocalAgentRuntime(BaseModel):
+    runtime_kind: str = "process"
+    project_build_id: str = ""
+    container_id: str = ""
+    container_image_id: str = ""
+    source_kind: str = "template"
+    project_path: str = ""
+    app_module: str = ""
     source_id: str = ""
     name: str
     label: str
@@ -172,6 +189,16 @@ class LocalAgentCreateRequest(BaseModel):
     auto_start: bool = False
 
 
+class ProjectBuildRequest(BaseModel):
+    image_ref: str = ""
+    platform: str = ""
+    offline: bool | None = None
+
+
+class ProjectPushRequest(BaseModel):
+    target_ref: str
+
+
 class CloudRunDeployRequest(BaseModel):
     agent_name: str
     project: str = ""
@@ -190,6 +217,8 @@ class CloudRunAuthCodeRequest(BaseModel):
 
 
 class RetireAgentRequest(BaseModel):
+    auth_method: str = ""
+    foundry_session_id: str = ""
     foundry_url: str = ""
     developer_token: str = ""
     github_token: str = ""
@@ -961,6 +990,22 @@ def _read_agent_source_bootstrap_state(agent_name: str) -> tuple[dict[str, Any],
     return {}, None
 
 
+def _project_debug_secret(agent: LiteAgentConfig) -> str:
+    try:
+        return LOCAL_AGENT_MANAGER.containers.debug_secret(agent.name, agent.base_url)
+    except (ValueError, OSError):
+        return ""
+
+
+def _chat_agent_client(agent: LiteAgentConfig) -> AgentClient:
+    secret = _project_debug_secret(agent)
+    if not secret:
+        state, _ = _read_agent_source_bootstrap_state(agent.name)
+        if str(state.get("public_base_url") or "").rstrip("/") == agent.base_url.rstrip("/"):
+            secret = str((state.get("env_vars") or {}).get("AGENT_SECRET") or "").strip()
+    return AgentClient(agent.base_url, agent_secret=secret or None)
+
+
 def _public_bootstrap_state(state: dict[str, Any]) -> dict[str, Any]:
     safe = {
         key: value
@@ -1052,7 +1097,7 @@ async def _developer_route_probes(foundry_url: str) -> dict[str, dict[str, Any]]
     normalized = _normalize_url(foundry_url)
     if not normalized:
         return {}
-    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+    async with foundry_http_client(timeout=8.0) as client:
         return {
             "bootstrap_ticket": await _probe_route(
                 client,
@@ -1086,16 +1131,21 @@ async def _retire_foundry_agent(
     if not normalized:
         raise HTTPException(status_code=400, detail="Foundry URL is required")
 
-    developer_token = str(request.developer_token or "").strip()
-    github_token = str(request.github_token or "").strip()
-    if not developer_token and not github_token:
-        raise HTTPException(status_code=400, detail="GitHub login is required before retiring a Foundry agent")
-
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if developer_token:
-        headers["Authorization"] = f"Bearer {developer_token}"
-    if github_token:
-        headers["X-GitHub-Token"] = github_token
+    if request.foundry_session_id or request.auth_method == "foundry":
+        headers, _, _ = await _developer_credentials(
+            normalized, request.foundry_session_id, request.developer_token, request.github_token, {},
+            auth_method=request.auth_method,
+        )
+    else:
+        developer_token = str(request.developer_token or "").strip()
+        github_token = str(request.github_token or "").strip()
+        if not developer_token and not github_token:
+            raise HTTPException(status_code=400, detail="Developer login is required before retiring a Foundry agent")
+        headers = {"Content-Type": "application/json"}
+        if developer_token:
+            headers["Authorization"] = f"Bearer {developer_token}"
+        if github_token:
+            headers["X-GitHub-Token"] = github_token
 
     reason = str(request.reason or "dev_board_retire").strip() or "dev_board_retire"
     payload = {
@@ -1107,7 +1157,7 @@ async def _retire_foundry_agent(
     encoded_name = quote(target_agent_name, safe="")
     route_attempts: list[dict[str, Any]] = []
     failure_message = ""
-    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+    async with foundry_http_client() as client:
         for method, route_path in (
             ("POST", f"/api/developer/agents/{encoded_name}/retire"),
             ("DELETE", f"/api/my/agents/{encoded_name}"),
@@ -1124,7 +1174,7 @@ async def _retire_foundry_agent(
             except Exception as exc:
                 logger.warning("Foundry retire request failed for %s %s", method, url, exc_info=exc)
                 route_attempts.append({"url": url, "method": method, "ok": False, "detail": "request_failed"})
-                continue
+                break
 
             entry: dict[str, Any] = {
                 "url": url,
@@ -1155,13 +1205,8 @@ async def _retire_foundry_agent(
                     "status": str(upstream_payload.get("status") or "RETIRED"),
                 }
 
-            try:
-                upstream_error = response.json()
-            except Exception:
-                upstream_error = {"detail": response.text}
-            if isinstance(upstream_error, dict):
-                failure_message = str(upstream_error.get("detail") or upstream_error.get("message") or "").strip()
-            failure_message = failure_message or f"Foundry retire request failed (status {response.status_code})"
+            failure_message = f"Foundry retire request failed (status {response.status_code})"
+            break
 
     raise HTTPException(
         status_code=409,
@@ -1242,12 +1287,46 @@ def _developer_identity_from_context(git_context: dict[str, Any], github_identit
     return identity
 
 
+async def _developer_credentials(
+    foundry_url: str,
+    session_id: str,
+    developer_token: str,
+    github_token: str,
+    git_context: dict[str, Any],
+    *, auth_method: str = "",
+) -> tuple[dict[str, str], dict[str, Any], dict[str, Any]]:
+    if auth_method == "foundry" and not session_id:
+        raise HTTPException(status_code=401, detail="Sign in to Foundry before using developer operations")
+    if session_id and auth_method == "github":
+        raise HTTPException(status_code=400, detail="Select one developer login method")
+    if session_id:
+        if developer_token.strip() or github_token.strip():
+            raise HTTPException(status_code=400, detail="Select one developer login method")
+        session = FOUNDRY_SESSIONS.resolve(session_id, foundry_url)
+        return (
+            {"Content-Type": "application/json", "Authorization": f"Bearer {session.developer_token}"},
+            dict(session.identity),
+            {"token_source": "foundry_local_account", "has_token": False},
+        )
+    resolved, source = _discover_github_token_for_foundry(github_token, foundry_url)
+    github = await _github_identity(resolved) if resolved else {}
+    github.update(token_source=source, has_token=bool(resolved))
+    headers = {"Content-Type": "application/json"}
+    if developer_token.strip():
+        headers["Authorization"] = f"Bearer {developer_token.strip()}"
+    if resolved:
+        headers["X-GitHub-Token"] = resolved
+    return headers, _developer_identity_from_context(git_context, github), github
+
+
 async def _sync_developer_notification_preferences(
     *,
     agent: LiteAgentConfig,
     foundry_url: str,
     developer_token: str,
     github_token: str,
+    foundry_session_id: str = "",
+    auth_method: str = "",
     email: str,
     bounty_success_email_enabled: bool,
 ) -> dict[str, Any]:
@@ -1261,27 +1340,18 @@ async def _sync_developer_notification_preferences(
         raise HTTPException(status_code=400, detail="Notification email is required")
 
     git_context = _git_context()
-    resolved_github_token, github_token_source = _discover_github_token_for_foundry(
-        github_token,
-        normalized_foundry_url,
+    headers, developer_identity, github_identity = await _developer_credentials(
+        normalized_foundry_url, foundry_session_id, developer_token, github_token, git_context,
+        auth_method=auth_method,
     )
-    github_identity = await _github_identity(resolved_github_token)
-    github_identity["token_source"] = github_token_source
-    github_identity["has_token"] = bool(resolved_github_token)
-    developer_identity = _developer_identity_from_context(git_context, github_identity)
+    github_token_source = str(github_identity.get("token_source") or "")
     source_id = _agent_source_id(agent.name)
     if source_id:
         developer_identity.setdefault("agent_source_id", source_id)
         developer_identity.setdefault("source_id", source_id)
 
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    normalized_developer_token = str(developer_token or "").strip()
-    if normalized_developer_token:
-        headers["Authorization"] = f"Bearer {normalized_developer_token}"
-    if resolved_github_token:
-        headers["X-GitHub-Token"] = resolved_github_token
-    if not normalized_developer_token and not resolved_github_token:
-        raise HTTPException(status_code=400, detail="GitHub login is required before syncing notification email")
+    if "Authorization" not in headers and "X-GitHub-Token" not in headers:
+        raise HTTPException(status_code=400, detail="Developer login is required before syncing notification email")
 
     payload = {
         "email": normalized_email,
@@ -1304,23 +1374,16 @@ async def _sync_developer_notification_preferences(
         },
     }
 
-    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+    async with foundry_http_client() as client:
         response = await client.post(
             f"{normalized_foundry_url}/api/developer/notification-preferences",
             headers=headers,
             json=payload,
         )
     if not response.is_success:
-        detail = response.text
-        try:
-            raw_error = response.json()
-            if isinstance(raw_error, dict):
-                detail = str(raw_error.get("detail") or raw_error.get("message") or response.text)
-        except Exception:
-            pass
         raise HTTPException(
             status_code=502,
-            detail=f"Foundry notification preference sync failed (status {response.status_code}): {detail}",
+            detail=f"Foundry notification preference sync failed (status {response.status_code})",
         )
 
     raw_result = response.json()
@@ -1338,7 +1401,7 @@ async def _sync_developer_notification_preferences(
                 "login": github_identity.get("login"),
                 "id": github_identity.get("id"),
                 "token_source": github_token_source,
-                "has_token": bool(resolved_github_token),
+                "has_token": bool(github_identity.get("has_token")),
             },
             "upstream": upstream,
         },
@@ -1352,7 +1415,7 @@ async def _sync_developer_notification_preferences(
             "login": github_identity.get("login"),
             "id": github_identity.get("id"),
             "token_source": github_token_source,
-            "has_token": bool(resolved_github_token),
+            "has_token": bool(github_identity.get("has_token")),
         },
     }
 
@@ -1489,7 +1552,7 @@ async def list_local_agent_templates() -> list[LocalAgentTemplate]:
 async def list_local_agents(include_retired: bool = False) -> list[LocalAgentRuntime]:
     return [
         LocalAgentRuntime.model_validate(item)
-        for item in LOCAL_AGENT_MANAGER.list_agents(include_retired=include_retired)
+        for item in await asyncio.to_thread(LOCAL_AGENT_MANAGER.list_agents, include_retired=include_retired)
     ]
 
 
@@ -1524,7 +1587,7 @@ async def create_local_agent(request: LocalAgentCreateRequest) -> LocalAgentRunt
 @app.post("/api/local-agents/{agent_name}/start")
 async def start_local_agent(agent_name: str) -> LocalAgentRuntime:
     try:
-        item = LOCAL_AGENT_MANAGER.start_agent(agent_name)
+        item = await asyncio.to_thread(LOCAL_AGENT_MANAGER.start_agent, agent_name)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Agent not found") from exc
     except RuntimeError as exc:
@@ -1537,7 +1600,7 @@ async def start_local_agent(agent_name: str) -> LocalAgentRuntime:
 @app.post("/api/local-agents/{agent_name}/stop")
 async def stop_local_agent(agent_name: str) -> LocalAgentRuntime:
     try:
-        item = LOCAL_AGENT_MANAGER.stop_agent(agent_name)
+        item = await asyncio.to_thread(LOCAL_AGENT_MANAGER.stop_agent, agent_name)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Agent not found") from exc
     except RuntimeError as exc:
@@ -1547,10 +1610,45 @@ async def stop_local_agent(agent_name: str) -> LocalAgentRuntime:
     return LocalAgentRuntime.model_validate(item)
 
 
+async def _project_operation(operation, *args, **kwargs):
+    try:
+        return await asyncio.to_thread(operation, *args, **kwargs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (RuntimeError, OSError) as exc:
+        logger.warning("Customer container operation failed", exc_info=exc)
+        raise HTTPException(status_code=409, detail=str(exc) if isinstance(exc, RuntimeError) else "Customer project files are unavailable") from exc
+
+
+@app.get("/api/local-agents/{agent_name}/container/build")
+async def project_container_receipt(agent_name: str):
+    return await _project_operation(LOCAL_AGENT_MANAGER.containers.receipt, agent_name)
+
+
+@app.post("/api/local-agents/{agent_name}/container/build")
+async def build_project_container(agent_name: str, request: ProjectBuildRequest):
+    return await _project_operation(LOCAL_AGENT_MANAGER.containers.build, agent_name, image_ref=request.image_ref, platform=request.platform, offline=request.offline)
+
+
+@app.post("/api/local-agents/{agent_name}/container/start")
+async def start_project_container(agent_name: str) -> LocalAgentRuntime:
+    result = await _project_operation(LOCAL_AGENT_MANAGER.containers.start, agent_name)
+    return LocalAgentRuntime.model_validate(result)
+
+
+@app.post("/api/local-agents/{agent_name}/container/export")
+async def export_project_container(agent_name: str):
+    return await _project_operation(LOCAL_AGENT_MANAGER.containers.export, agent_name)
+
+
+@app.post("/api/local-agents/{agent_name}/container/push")
+async def push_project_container(agent_name: str, request: ProjectPushRequest):
+    return await _project_operation(LOCAL_AGENT_MANAGER.containers.push, agent_name, request.target_ref)
+
+
 @app.post("/api/local-agents/{agent_name}/retire")
 async def retire_local_agent(agent_name: str, request: RetireAgentRequest) -> dict[str, Any]:
-    agents = _load_agents()
-    agent = agents.get(agent_name)
+    agent = _agent_config_from_runtime_or_source(agent_name)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -1617,7 +1715,7 @@ async def retire_local_agent(agent_name: str, request: RetireAgentRequest) -> di
     local_runtime: dict[str, Any] | None = None
     if request.stop_local:
         try:
-            local_runtime = LOCAL_AGENT_MANAGER.retire_agent(agent_name, remote_result=remote_result)
+            local_runtime = await asyncio.to_thread(LOCAL_AGENT_MANAGER.retire_agent, agent_name, remote_result=remote_result)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="Agent not found") from exc
         except RuntimeError as exc:
@@ -1702,6 +1800,8 @@ async def deploy_cloud_run(request: CloudRunDeployRequest) -> dict[str, Any]:
         _, item = LOCAL_AGENT_MANAGER._find_agent(request.agent_name)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Agent not found") from exc
+    if item.get("source_kind") == "project":
+        raise HTTPException(status_code=400, detail="Customer projects use local containers or private registries; Cloud Run currently supports built-in templates only")
     instance_dir = Path(item.get("instance_dir", ""))
     foundry_url = request.foundry_url or str(item.get("foundry_url") or "")
     try:
@@ -1814,7 +1914,7 @@ async def list_agents() -> list[dict[str, Any]]:
         manifest = None
         error = ""
         try:
-            manifest = (await AgentClient(agent.base_url).manifest()).model_dump(mode="json")
+            manifest = (await _chat_agent_client(agent).manifest()).model_dump(mode="json")
         except Exception as exc:
             logger.warning("Manifest probe failed for %s", agent.base_url, exc_info=exc)
             error = "Manifest unavailable"
@@ -1836,7 +1936,7 @@ async def get_manifest(agent_name: str) -> dict[str, Any]:
     agents = _load_agents()
     if agent_name not in agents:
         raise HTTPException(status_code=404, detail="Agent not found")
-    manifest = await AgentClient(agents[agent_name].base_url).manifest()
+    manifest = await _chat_agent_client(agents[agent_name]).manifest()
     return manifest.model_dump(mode="json")
 
 
@@ -1908,15 +2008,51 @@ async def probe_handshake(request: LiteHandshakeProbeRequest) -> dict[str, Any]:
     }
 
 
+async def _read_foundry_login_body(request: Request) -> dict[str, str]:
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > 8192:
+            raise HTTPException(status_code=400, detail="Invalid developer sign-in request")
+    try:
+        value = json.loads(body)
+        if not isinstance(value, dict) or any(not isinstance(item, str) for item in value.values()):
+            raise ValueError
+        return value
+    except (ValueError, UnicodeError):
+        raise HTTPException(status_code=400, detail="Invalid developer sign-in request") from None
+
+
+@app.post("/api/developer/foundry-login")
+async def foundry_developer_login(request: Request, response: Response) -> dict[str, Any]:
+    value = await _read_foundry_login_body(request)
+    session = await login_to_foundry(value.get("foundry_url", ""), value.get("username", ""), value.get("password", ""))
+    handle = FOUNDRY_SESSIONS.add(session)
+    response.headers["Cache-Control"] = "no-store"
+    return {"ok": True, "session_id": handle, "foundry_url": session.foundry_url,
+            "developer_identity": session.identity,
+            "expires_at": datetime.fromtimestamp(session.expires_at, timezone.utc).isoformat()}
+
+
+@app.post("/api/developer/foundry-logout")
+async def foundry_developer_logout(request: Request, response: Response) -> dict[str, bool]:
+    value = await _read_foundry_login_body(request)
+    FOUNDRY_SESSIONS.remove(value.get("session_id", ""))
+    response.headers["Cache-Control"] = "no-store"
+    return {"ok": True}
+
+
 @app.post("/api/developer/context")
 async def developer_context(request: DeveloperContextRequest) -> dict[str, Any]:
     git_context = _git_context()
-    token, token_source = _discover_github_token()
-    github_identity = await _github_identity(token)
+    normalized_foundry_url = _normalize_url(request.foundry_url)
+    token, token_source = ("", "foundry_local_account")
+    if request.auth_method == "github":
+        token, token_source = _discover_github_token_for_foundry("", normalized_foundry_url)
+    github_identity = await _github_identity(token) if token else {}
     github_identity["token_source"] = token_source
     github_identity["has_token"] = bool(token)
 
-    normalized_foundry_url = _normalize_url(request.foundry_url)
     route_probes = await _developer_route_probes(normalized_foundry_url) if normalized_foundry_url else {}
 
     return {
@@ -2076,6 +2212,8 @@ async def sync_developer_notification_preferences(
         foundry_url=normalized_foundry_url,
         developer_token=request.developer_token,
         github_token=request.github_token,
+        foundry_session_id=request.foundry_session_id,
+        auth_method=request.auth_method,
         email=request.email,
         bounty_success_email_enabled=request.bounty_success_email_enabled,
     )
@@ -2083,8 +2221,7 @@ async def sync_developer_notification_preferences(
 
 @app.post("/api/developer/bootstrap-ticket")
 async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -> dict[str, Any]:
-    agents = _load_agents()
-    agent = agents.get(request.agent_name)
+    agent = _agent_config_from_runtime_or_source(request.agent_name)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -2096,25 +2233,14 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
     install_to_source_only = runtime_target in {"cloud_run", "source", "source_state"}
 
     git_context = _git_context()
-    github_token, github_token_source = _discover_github_token_for_foundry(
-        request.github_token,
-        normalized_foundry_url,
+    headers, developer_identity, github_identity = await _developer_credentials(
+        normalized_foundry_url, request.foundry_session_id, request.developer_token, request.github_token, git_context,
+        auth_method=request.auth_method,
     )
-    github_identity = await _github_identity(github_token)
-    github_identity["token_source"] = github_token_source
-    github_identity["has_token"] = bool(github_token)
-    developer_identity = _developer_identity_from_context(git_context, github_identity)
     source_id = _agent_source_id(agent.name)
     if source_id:
         developer_identity.setdefault("agent_source_id", source_id)
         developer_identity.setdefault("source_id", source_id)
-
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    developer_token = str(request.developer_token or "").strip()
-    if developer_token:
-        headers["Authorization"] = f"Bearer {developer_token}"
-    if github_token:
-        headers["X-GitHub-Token"] = github_token
 
     payload = {
         "agent_name": agent.name,
@@ -2139,7 +2265,7 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
     ticket_response: dict[str, Any] | None = None
     ticket_route = ""
     failure_message = ""
-    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+    async with foundry_http_client() as client:
         for route_path in ("/api/developer/bootstrap-ticket", "/api/dev/bootstrap-ticket"):
             url = f"{normalized_foundry_url}{route_path}"
             try:
@@ -2147,7 +2273,7 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
             except Exception as exc:
                 logger.warning("Bootstrap ticket request failed for %s", url, exc_info=exc)
                 route_attempts.append({"url": url, "ok": False, "detail": "request_failed"})
-                continue
+                break
 
             entry = {
                 "url": url,
@@ -2161,7 +2287,7 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
                 continue
             if not response.is_success:
                 failure_message = f"Foundry bootstrap ticket request failed (status {response.status_code})"
-                continue
+                break
             raw_payload = response.json()
             ticket_response = raw_payload if isinstance(raw_payload, dict) else {"value": raw_payload}
             ticket_route = url
@@ -2237,11 +2363,12 @@ async def developer_bootstrap_ticket(request: DeveloperBootstrapTicketRequest) -
                     }
         else:
             runtime_apply_failed = False
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=False, trust_env=False) as client:
                 try:
                     response = await client.post(
                         f"{agent.base_url.rstrip('/')}/foundry/bootstrap/developer-claim",
                         json=apply_payload,
+                        headers={"Authorization": "Bearer " + _project_debug_secret(agent)} if _project_debug_secret(agent) else {},
                     )
                 except (httpx.TimeoutException, httpx.HTTPError) as exc:
                     runtime_apply_failed = True
@@ -2329,7 +2456,7 @@ async def chat(request: LiteChatRequest) -> StreamingResponse:
         reply_buffer = ""
         final_emitted = False
         metadata: dict[str, Any] = {}
-        client = AgentClient(agent.base_url)
+        client = _chat_agent_client(agent)
         try:
             async for event_type, event_data in client.stream_foundry_chat(payload):
                 if event_type == "step":
@@ -2423,7 +2550,7 @@ async def chat_sync(request: LiteChatRequest) -> LiteChatResponse:
     dev_overrides = _normalized_dev_overrides(request.dev_overrides)
     if dev_overrides:
         metadata["dev_overrides"] = dev_overrides
-    response = await AgentClient(agent.base_url).chat(
+    response = await _chat_agent_client(agent).chat(
         ChatRequest(
             message=request.message,
             mode=request.mode,

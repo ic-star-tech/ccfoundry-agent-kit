@@ -176,8 +176,17 @@ gcloud run deploy my-agent \
   --min-instances=0 \
   --max-instances=5 \
   --timeout=300 \
-  --set-env-vars="AGENT_DEPLOY_MODE=cloud_run,ME_AGENT_NAME=my-agent,ME_AGENT_BASE_DIR=/app,FOUNDRY_DISCOVERY_ENABLE=true,FOUNDRY_RUNTIME_TRANSPORT=pull"
+  --no-allow-unauthenticated \
+  --invoker-iam-check \
+  --set-env-vars="AGENT_DEPLOY_MODE=cloud_run,FOUNDRY_POLL_AUTH_MODE=platform,ME_AGENT_NAME=my-agent,ME_AGENT_BASE_DIR=/app,FOUNDRY_DISCOVERY_ENABLE=true,FOUNDRY_RUNTIME_TRANSPORT=pull"
 ```
+
+`FOUNDRY_POLL_AUTH_MODE=platform` makes the example delegate only the polling
+endpoint to Cloud Run's identity gate. Keep unauthenticated access disabled and
+the invoker IAM check enabled; the SDK does not independently verify Google OIDC
+tokens. Chat/workspace still use `AGENT_SECRET`. Scheduler's OIDC setup follows
+the [Google HTTP target authentication contract](https://docs.cloud.google.com/scheduler/docs/http-target-auth);
+the deployment flags are documented in [gcloud run deploy](https://docs.cloud.google.com/sdk/gcloud/reference/run/deploy).
 
 ### Step 4: Create Cloud Scheduler Job
 

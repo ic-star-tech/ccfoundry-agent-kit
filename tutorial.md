@@ -12,6 +12,11 @@ required because the deploy script creates a Compute Engine VM.
 If you do not have a suitable project yet, use the "Create a new project" link
 above. You can also type `new` in the Terminal project prompt.
 
+Dev Board has no login, so the script opens its ports only to one address.
+Before you deploy, open <https://checkip.amazonaws.com> in the browser you will
+use for Dev Board and note the address shown; the Terminal asks for it (type
+`any` only if you really want the Dev Board reachable from the whole internet).
+
 Then click the button on the code block below to deploy CCFoundry Agent Dev
 Board.
 

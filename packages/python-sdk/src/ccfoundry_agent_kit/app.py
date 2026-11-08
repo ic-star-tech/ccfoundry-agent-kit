@@ -16,6 +16,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocke
 from fastapi.responses import StreamingResponse
 
 from .agent_space import AgentSpace
+from .auth import AgentSecretAuth, matches_bearer
 from .bootstrap import FoundryApprovalPayload, FoundryBootstrap, FoundryDeveloperClaimPayload, FoundryInvitePayload
 from .models import AgentManifest, ChatRequest, ChatResponse, ContextMode, HealthResponse
 from .pull_runtime import FoundryPullRuntime
@@ -37,10 +38,23 @@ def create_agent_app(
     agent_space_dir: str | Path,
     foundry_bootstrap: FoundryBootstrap | None = None,
     bounty_handler: BountyHandler | None = None,
+    require_agent_secret: bool = False,
+    platform_authenticated_poll: bool = False,
 ) -> FastAPI:
     app = FastAPI(title=manifest.label, version=manifest.version)
     agent_space = AgentSpace(Path(agent_space_dir))
-    bootstrap_state = foundry_bootstrap.state if foundry_bootstrap else None
+    def agent_secret() -> str | None:
+        # Read live state: registration/approval can deliver or rotate the secret
+        # after the app was created, without updating the process environment.
+        env_vars = foundry_bootstrap.state.env_vars if foundry_bootstrap else {}
+        if "AGENT_SECRET" in env_vars:
+            return str(env_vars["AGENT_SECRET"] or "").strip()
+        value = os.environ.get("AGENT_SECRET")
+        return value.strip() if value is not None else None
+
+    app.add_middleware(AgentSecretAuth, get_secret=agent_secret,
+                       required=require_agent_secret or agent_secret() is not None,
+                       platform_authenticated_poll=platform_authenticated_poll)
 
     app.include_router(build_workspace_router(agent_space.workspace_dir))
 
@@ -172,9 +186,11 @@ def create_agent_app(
     async def chat(request: ChatRequest) -> ChatResponse:
         return await _run_chat(request)
 
-    @app.post("/api/chat")
-    async def foundry_chat(payload: dict[str, Any]) -> StreamingResponse:
+    @app.post("/api/chat", response_model=None)
+    async def foundry_chat(payload: dict[str, Any]) -> ChatResponse | StreamingResponse:
         request = _normalize_foundry_chat_payload(payload if isinstance(payload, dict) else {})
+        if not request.stream:
+            return await _run_chat(request)
 
         async def event_generator():
             try:
@@ -242,17 +258,11 @@ def create_agent_app(
     if _native_terminal_enabled():
         @app.websocket("/pty")
         async def pty_websocket(websocket: WebSocket) -> None:
-            expected_secret = str((bootstrap_state.env_vars if bootstrap_state else {}).get("AGENT_SECRET") or "").strip()
-            if not expected_secret:
+            expected_secret = agent_secret() or ""
+            if not matches_bearer(websocket.scope, expected_secret):
                 # Refuse PTY access entirely when no secret is configured
                 await websocket.close(code=1008)
                 return
-            auth_header = str(websocket.headers.get("authorization") or "").strip()
-            token = auth_header.split(" ", 1)[1].strip() if auth_header.lower().startswith("bearer ") else auth_header
-            if token != expected_secret:
-                await websocket.close(code=1008)
-                return
-
             await websocket.accept()
 
             shell = (

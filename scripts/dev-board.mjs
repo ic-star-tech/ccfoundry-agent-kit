@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { dependencyOptions, ensureDependencies } from "./dev-board-deps.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(__dirname, "..");
@@ -48,7 +49,13 @@ Options:
   --host <host>            Bind host for both services (default: 127.0.0.1)
   --api-port <port>        Preferred API port (default: 8090)
   --web-port <port>        Preferred web port (default: 3000)
+  --project <path>         Add a customer project directory (repeatable)
   --workspace <path>       Working directory for .venv and .dev-board (default: current directory)
+  --offline               Install from prepared wheels and npm cache, without index fallback
+  --online                Use configured pip/npm sources (override CCFOUNDRY_OFFLINE)
+  --wheelhouse <path>      Python dependency wheels (required for offline setup)
+  --npm-cache <path>       npm cache to use for installation
+  --setup-only            Prepare dependencies and exit before starting services
   -h, --help               Show help
   -v, --version            Print version
 `);
@@ -68,11 +75,23 @@ if (!validCommands.has(command)) {
   fail(`Unknown command: ${command}. Run "ccfoundry --help" for usage.`);
 }
 
+const projects = [];
+for (let index = 0; index < args.length; index += 1) {
+  if (args[index] === "--project") {
+    const value = args[++index];
+    if (!value || value.startsWith("--")) fail("--project requires a project directory");
+    projects.push(resolve(value));
+  } else if (args[index].startsWith("--project=")) {
+    const value = args[index].slice("--project=".length);
+    if (!value) fail("--project requires a project directory");
+    projects.push(resolve(value));
+  }
+}
+if (projects.length) process.env.CCFOUNDRY_AGENT_PROJECTS = JSON.stringify(projects);
+
 const workspaceRoot = resolve(readFlag("workspace", process.env.CCFOUNDRY_WORKSPACE || process.cwd()));
 const venvDir = join(workspaceRoot, ".venv");
 const venvPython = join(venvDir, "bin", "python");
-const venvStamp = join(venvDir, ".ccfoundry-dev-board.stamp");
-const webStamp = join(webDir, "node_modules", ".ccfoundry-dev-board.stamp");
 const runtimeDir = join(workspaceRoot, ".dev-board");
 const runtimeAgentsFile = join(runtimeDir, "agents.generated.yaml");
 const cliHint = process.env.npm_lifecycle_event
@@ -108,7 +127,7 @@ function defaultCorsOriginRegex(targetHost) {
 
 function runCapture(command, commandArgs, options = {}) {
   return spawnSync(command, commandArgs, {
-    cwd: workspaceRoot,
+    cwd: packageRoot,
     encoding: "utf-8",
     ...options,
   });
@@ -214,29 +233,6 @@ function ensureVenv(pythonCommand) {
   }
 }
 
-function newestMtime(paths) {
-  let latest = 0;
-  for (const target of paths) {
-    const value = statSync(target).mtimeMs;
-    if (value > latest) {
-      latest = value;
-    }
-  }
-  return latest;
-}
-
-function needsRefresh(stampFile, watchedFiles) {
-  if (!existsSync(stampFile)) {
-    return true;
-  }
-  return statSync(stampFile).mtimeMs < newestMtime(watchedFiles);
-}
-
-function touch(target, payload) {
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, payload, "utf-8");
-}
-
 async function waitForHttp(url, timeoutMs = 30000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -251,45 +247,6 @@ async function waitForHttp(url, timeoutMs = 30000) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
   }
   throw new Error(`Timed out waiting for ${url}`);
-}
-
-function ensurePythonDeps() {
-  const watched = [
-    join(packageRoot, "packages", "python-sdk", "pyproject.toml"),
-    join(packageRoot, "examples", "me_agent", "pyproject.toml"),
-    join(packageRoot, "apps", "agent-dev-board-api", "pyproject.toml"),
-  ];
-  if (!needsRefresh(venvStamp, watched)) {
-    return;
-  }
-  log(`Installing Python packages into ${venvDir}`);
-  runChecked(venvPython, ["-m", "pip", "install", "-U", "pip"]);
-  runChecked(venvPython, [
-    "-m",
-    "pip",
-    "install",
-    "-e",
-    join(packageRoot, "packages", "python-sdk"),
-    "-e",
-    join(packageRoot, "examples", "me_agent"),
-    "-e",
-    join(packageRoot, "apps", "agent-dev-board-api"),
-  ]);
-  touch(venvStamp, `python deps refreshed ${new Date().toISOString()}\n`);
-}
-
-function ensureWebDeps() {
-  const watched = [
-    join(webDir, "package.json"),
-    join(webDir, "package-lock.json"),
-  ].filter((target) => existsSync(target));
-  const hasNodeModules = existsSync(join(webDir, "node_modules"));
-  if (hasNodeModules && !needsRefresh(webStamp, watched)) {
-    return;
-  }
-  log("Installing web dependencies for Agent Dev Board");
-  runChecked("npm", ["install", "--no-fund", "--no-audit"], { cwd: webDir });
-  touch(webStamp, `web deps refreshed ${new Date().toISOString()}\n`);
 }
 
 function ensureRuntimeAgentsFile() {
@@ -376,9 +333,13 @@ async function main() {
   log(`Using ${python.command} (${python.version})`);
   log(`Workspace: ${workspaceRoot}`);
   log(`Package:   ${packageRoot}`);
+  const options = dependencyOptions(args);
   ensureVenv(python.command);
-  ensurePythonDeps();
-  ensureWebDeps();
+  ensureDependencies({ packageRoot, workspaceRoot, venvPython, options, log });
+  if (options.setupOnly) {
+    log("Dependency setup complete.");
+    return;
+  }
   ensureRuntimeAgentsFile();
 
   const reserved = new Set();

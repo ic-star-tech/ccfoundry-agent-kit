@@ -26,9 +26,30 @@ jobs:
           python -m pip install -U pip pytest
           python -m pip install -e packages/python-sdk
           python -m pip install -e apps/agent-dev-board-api
+          python -m pip install -e examples/me_agent
       - name: Run Python tests
         run: |
-          python -m pytest packages/python-sdk/tests apps/agent-dev-board-api/tests
+          python -m pytest packages/python-sdk/tests apps/agent-dev-board-api/tests tests/test_release_publish_guard.py
+
+  release-candidate:
+    name: Release candidate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install build tools
+        run: python -m pip install build twine pytest
+      - name: Build committed candidate without publishing
+        run: python scripts/prepare_release.py --output /tmp/ccfoundry-release-candidate
+      - name: Verify archives and fresh installations
+        env:
+          CCFOUNDRY_RELEASE_ARTIFACTS: /tmp/ccfoundry-release-candidate
+        run: python -m pytest tests/test_release_artifacts.py -q
 
   web:
     name: Web
@@ -40,6 +61,8 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: apps/agent-dev-board-web/package-lock.json
+      - name: Test dependency launcher
+        run: npm run test:launcher
       - name: Install web dependencies
         working-directory: apps/agent-dev-board-web
         run: npm ci
@@ -49,3 +72,12 @@ jobs:
       - name: Build web
         working-directory: apps/agent-dev-board-web
         run: npm run build
+      - name: Install browser test dependencies
+        working-directory: tests/browser
+        run: npm ci --no-audit --no-fund
+      - name: Install Chromium
+        working-directory: tests/browser
+        run: npx playwright install --with-deps chromium
+      - name: Customer project browser workflow
+        working-directory: tests/browser
+        run: npm test

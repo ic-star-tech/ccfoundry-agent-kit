@@ -1,23 +1,221 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AgentManifest",
-  "type": "object",
-  "required": ["name", "label", "version", "capabilities", "default_mode", "metadata"],
-  "properties": {
-    "name": { "type": "string" },
-    "label": { "type": "string" },
-    "version": { "type": "string" },
-    "description": { "type": "string" },
-    "capabilities": {
-      "type": "array",
-      "items": { "type": "string" }
+  "$defs": {
+    "ContextMode": {
+      "enum": [
+        "direct",
+        "inline"
+      ],
+      "title": "ContextMode",
+      "type": "string"
     },
-    "default_mode": {
-      "type": "string",
-      "enum": ["direct", "inline"]
+    "FoundryDashboardManifest": {
+      "additionalProperties": true,
+      "properties": {
+        "soul_visible": {
+          "default": true,
+          "title": "Soul Visible",
+          "type": "boolean"
+        },
+        "soul_editable": {
+          "default": true,
+          "title": "Soul Editable",
+          "type": "boolean"
+        },
+        "model_editable": {
+          "default": true,
+          "title": "Model Editable",
+          "type": "boolean"
+        },
+        "config_editable": {
+          "default": true,
+          "title": "Config Editable",
+          "type": "boolean"
+        },
+        "reflection_visible": {
+          "default": true,
+          "title": "Reflection Visible",
+          "type": "boolean"
+        },
+        "vault_visible": {
+          "default": true,
+          "title": "Vault Visible",
+          "type": "boolean"
+        }
+      },
+      "title": "FoundryDashboardManifest",
+      "type": "object"
     },
-    "metadata": {
+    "FoundryInfraManifest": {
+      "additionalProperties": true,
+      "properties": {
+        "heartbeat_managed": {
+          "default": true,
+          "title": "Heartbeat Managed",
+          "type": "boolean"
+        },
+        "reflection_managed": {
+          "default": true,
+          "title": "Reflection Managed",
+          "type": "boolean"
+        }
+      },
+      "title": "FoundryInfraManifest",
+      "type": "object"
+    },
+    "FoundryLLMManifest": {
+      "additionalProperties": true,
+      "properties": {
+        "needs_gateway": {
+          "default": true,
+          "title": "Needs Gateway",
+          "type": "boolean"
+        }
+      },
+      "title": "FoundryLLMManifest",
+      "type": "object"
+    },
+    "FoundryMCPManifest": {
+      "additionalProperties": true,
+      "properties": {
+        "accepts_foundry_mcp": {
+          "default": true,
+          "title": "Accepts Foundry Mcp",
+          "type": "boolean"
+        },
+        "has_own_mcp": {
+          "default": false,
+          "title": "Has Own Mcp",
+          "type": "boolean"
+        }
+      },
+      "title": "FoundryMCPManifest",
+      "type": "object"
+    },
+    "FoundryManifest": {
+      "additionalProperties": true,
+      "properties": {
+        "llm": {
+          "$ref": "#/$defs/FoundryLLMManifest"
+        },
+        "dashboard": {
+          "$ref": "#/$defs/FoundryDashboardManifest"
+        },
+        "infra": {
+          "$ref": "#/$defs/FoundryInfraManifest"
+        },
+        "mcp": {
+          "$ref": "#/$defs/FoundryMCPManifest"
+        }
+      },
+      "title": "FoundryManifest",
+      "type": "object"
+    },
+    "SlashCommand": {
+      "additionalProperties": true,
+      "properties": {
+        "cmd": {
+          "title": "Cmd",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "desc": {
+          "default": "",
+          "title": "Desc",
+          "type": "string"
+        },
+        "skill_ref": {
+          "default": "",
+          "title": "Skill Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cmd",
+        "label"
+      ],
+      "title": "SlashCommand",
       "type": "object"
     }
-  }
+  },
+  "additionalProperties": true,
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "label": {
+      "title": "Label",
+      "type": "string"
+    },
+    "version": {
+      "default": "0.1.0",
+      "title": "Version",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Capabilities",
+      "type": "array"
+    },
+    "default_mode": {
+      "$ref": "#/$defs/ContextMode",
+      "default": "direct"
+    },
+    "manifest": {
+      "$ref": "#/$defs/FoundryManifest"
+    },
+    "features": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Features",
+      "type": "array"
+    },
+    "loaded_skills": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Loaded Skills",
+      "type": "array"
+    },
+    "slash_commands": {
+      "items": {
+        "$ref": "#/$defs/SlashCommand"
+      },
+      "title": "Slash Commands",
+      "type": "array"
+    },
+    "privacy": {
+      "additionalProperties": true,
+      "title": "Privacy",
+      "type": "object"
+    },
+    "billing": {
+      "additionalProperties": true,
+      "title": "Billing",
+      "type": "object"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "name",
+    "label"
+  ],
+  "title": "AgentManifest",
+  "type": "object"
 }
