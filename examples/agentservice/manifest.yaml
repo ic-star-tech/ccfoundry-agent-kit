@@ -1,0 +1,81 @@
+# AgentService manifest that installs examples/me_agent on a Foundry instance
+# as a Marketplace local package. See docs/agentservice-packaging.md.
+#
+# Check it before uploading (Admin Panel -> Marketplace -> Local packages):
+#   python -m ccfoundry_agent_kit.agentservice_manifest examples/agentservice/manifest.yaml
+apiVersion: foundry.ai/v1
+kind: AgentService
+metadata:
+  name: me-agent
+  version: "0.1.0"
+  displayName: "Me Agent"
+  description: "Personal assistant built with ccfoundry-agent-kit. Keeps durable notes in its own agent_space and answers through the instance LLM gateway."
+  icon: "🧠"
+  category: productivity
+  author: "Example Corp"
+  tags: [personal, notes, example]
+spec:
+  tier: local
+  zone: GREEN
+  image:
+    # Must stay under the runner's local prefix (default local/) and carry no tag.
+    repository: local/me-agent
+    tag: "0.1.0"
+    # REPLACE BEFORE UPLOADING. The zero digest is a placeholder: it passes the
+    # syntax check but no image matches it, so the install fails. Use the output of
+    #   docker image inspect --format '{{.Id}}' local/me-agent:0.1.0
+    # run on the appliance after docker load.
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  runtime:
+    runner: docker
+    container_name: foundry-agent-me-agent
+    port: 8080
+    protocol: http
+    # endpoint_path is the base under which Foundry calls /api/chat: "/" makes
+    # the service URL the container root, http://foundry-agent-me-agent:8080/
+    endpoint_path: /
+    # Served by the SDK app without authentication; Foundry's agent status
+    # check calls GET <service_url>/health.
+    healthcheck_path: /health
+    # Fixed environment for the container.
+    environment:
+      ME_AGENT_BASE_DIR: /app
+    # Values injected by name: AGENT_SECRET is issued by Foundry at install
+    # time, the others come from the install form (config_schema below). A key
+    # that is not listed here never reaches the container, and without
+    # AGENT_SECRET the agent cannot check Foundry's bearer.
+    config_env:
+      - AGENT_SECRET
+      - OPENAI_BASE_URL
+      - OPENAI_API_KEY
+      - ME_AGENT_MODEL
+    # The instance LLM gateway (LiteLLM) is reachable on this network.
+    additional_networks: [foundry_agent_llm_net]
+  agent:
+    agent_name: me_agent
+    label: "Me Agent"
+    icon: "🧠"
+    color: "#6366f1"
+    tagline: "Personal assistant that remembers what you tell it"
+    interaction_modes: [chat]
+  access:
+    # Local packages need the advanced plan; lower values are raised to advanced.
+    required_plan: advanced
+    required_features: [marketplace_advanced_agents]
+  config_schema:
+    - key: OPENAI_BASE_URL
+      label: "LLM gateway (OpenAI-compatible)"
+      type: string
+      required: false
+      default: "http://foundry-litellm:4000/v1"
+      help: "Base URL of an OpenAI-compatible API. The default is the instance LiteLLM gateway."
+    - key: OPENAI_API_KEY
+      label: "LLM gateway key"
+      type: secret
+      required: false
+      help: "A LiteLLM virtual key scoped to this agent, not the instance master key. Leave empty to run me_agent in its offline fallback mode."
+    - key: ME_AGENT_MODEL
+      label: "Chat model"
+      type: string
+      required: false
+      help: "A model name the key can call (see GET /v1/models on the gateway)."

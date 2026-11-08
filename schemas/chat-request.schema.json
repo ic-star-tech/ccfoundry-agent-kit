@@ -1,14 +1,92 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ChatRequest",
-  "type": "object",
-  "required": ["message", "mode", "username", "context", "conversation_id", "metadata"],
+  "$defs": {
+    "ContextMode": {
+      "enum": [
+        "direct",
+        "inline"
+      ],
+      "title": "ContextMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": true,
   "properties": {
-    "message": { "type": "string" },
-    "mode": { "type": "string", "enum": ["direct", "inline"] },
-    "username": { "type": "string" },
-    "context": { "type": "string" },
-    "conversation_id": { "type": "string" },
-    "metadata": { "type": "object" }
-  }
+    "message": {
+      "title": "Message",
+      "type": "string"
+    },
+    "mode": {
+      "$ref": "#/$defs/ContextMode",
+      "default": "direct"
+    },
+    "username": {
+      "default": "local-user",
+      "title": "Username",
+      "type": "string"
+    },
+    "user_id": {
+      "default": "",
+      "title": "User Id",
+      "type": "string"
+    },
+    "context": {
+      "default": "",
+      "title": "Context",
+      "type": "string"
+    },
+    "conversation_id": {
+      "default": "",
+      "title": "Conversation Id",
+      "type": "string"
+    },
+    "session_id": {
+      "default": "",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "history": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "History",
+      "type": "array"
+    },
+    "images": {
+      "items": {},
+      "title": "Images",
+      "type": "array"
+    },
+    "files": {
+      "items": {},
+      "title": "Files",
+      "type": "array"
+    },
+    "skill_ref": {
+      "default": "",
+      "title": "Skill Ref",
+      "type": "string"
+    },
+    "inline_context": {
+      "additionalProperties": true,
+      "title": "Inline Context",
+      "type": "object"
+    },
+    "stream": {
+      "default": false,
+      "title": "Stream",
+      "type": "boolean"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "message"
+  ],
+  "title": "ChatRequest",
+  "type": "object"
 }

@@ -11,6 +11,11 @@ Its implementation lives in:
 - `apps/agent-dev-board-api`
 - `apps/agent-dev-board-web`
 
+For an approved local agent, chat uses the service secret from its local
+bootstrap state. It stays on the API server and is sent only when the configured
+agent URL matches that state's `public_base_url`. If the agent URL changes,
+update its bootstrap configuration before using the playground again.
+
 ## One-command startup
 
 From the repository root:

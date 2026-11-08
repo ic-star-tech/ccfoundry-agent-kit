@@ -28,7 +28,13 @@ By default it deploys to `us-central1-a` as `ccfoundry-dev-board`. To change the
 CCFOUNDRY_ZONE=asia-east2-a CCFOUNDRY_INSTANCE_NAME=my-dev-board ./deploy.sh
 ```
 
-The default firewall rule allows public access for demo convenience. To restrict it, set `CCFOUNDRY_SOURCE_RANGES` before running the script.
+The Dev Board API has no login and can start local processes and deploy with the VM's cloud credentials, so the firewall rule for ports `3000` and `8090` is **not** open to the internet by default:
+
+- run locally with `gcloud`, the script detects your public IP and allows only that address;
+- in Cloud Shell, the shell's own address is not your browser's, so the script asks for the IP of the browser you will use (open <https://checkip.amazonaws.com> in that browser); non-interactive runs must set it explicitly;
+- set `CCFOUNDRY_SOURCE_RANGES` to choose the allowed CIDRs yourself, for example `CCFOUNDRY_SOURCE_RANGES=203.0.113.7/32,198.51.100.0/24 ./deploy.sh`. Re-running the script updates the existing rule.
+
+`CCFOUNDRY_SOURCE_RANGES=0.0.0.0/0` still opens Dev Board to everyone, with a warning. Only do that for a short-lived demo VM.
 
 ## The Idea
 
@@ -53,7 +59,7 @@ The default firewall rule allows public access for demo convenience. To restrict
 |----------|---------------|
 | [**A2A**](https://github.com/google/A2A) | Agent Card at `/.well-known/agent-card.json` for discovery, following Google's Agent-to-Agent specification |
 | [**AP2**](https://github.com/google-agentic-commerce/AP2) | Three-layer mandate chain (Intent → Cart → Settlement) for cryptographically signed agent payment settlement |
-| [**MCP**](https://modelcontextprotocol.io) | Manifest-level MCP declarations and config hooks; runtime MCP transport is not built into the SDK yet |
+| [**MCP**](https://modelcontextprotocol.io) | Streamable HTTP, stdio and legacy SSE clients; approved resource refresh and a bounded example tool loop |
 | **OpenAI Chat Completions** | Universal model interface — any compatible provider works |
 
 See [Standards](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/standards.md) for details.
@@ -80,6 +86,10 @@ ccfoundry
 
 The global CLI writes `.venv/` and `.dev-board/` into your current working directory, then starts the Dev Board on a local web port, usually `http://127.0.0.1:3000`. The explicit subcommand form is also supported: `ccfoundry dev-board`.
 
+For private mirrors, company CAs and offline wheels/npm caches, see
+[Intranet dependency setup](docs/intranet-dependencies.md). Use `ccfoundry --setup-only`
+to prepare dependencies without starting services.
+
 ## Run From Source
 
 For repo-local development instead:
@@ -98,7 +108,7 @@ See [Quickstart](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/d
 
 - **Agent-first** — The agent is a living entity with its own soul, not a stateless endpoint
 - **Sovereign by default** — Private state never leaves the agent's control without explicit consent
-- **Protocol-aligned** — A2A for discovery, AP2 for payment mandates, SSE for streaming, OpenAI-compatible model calls, and MCP-ready manifest metadata
+- **Protocol-aligned** — A2A for discovery, AP2 for payment mandates, SSE for streaming, OpenAI-compatible model calls, and MCP tool sessions
 - **Self-hostable** — Runs on your machine with local Python and Node.js, or deploys to Google Cloud Run for always-on operation
 - **Evolvable** — Skills and knowledge improve through use, not just code changes
 - **Transparent economics** — Resource costs (LLM, sandbox) are per-task verified and deducted from rewards, with full audit trail
@@ -107,20 +117,25 @@ See [Philosophy](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/d
 
 ## Documentation
 
+- [Releases and compatibility](docs/releases.md) — Python/npm artifacts, tested contracts and publication handoff
+- [Changelog](CHANGELOG.md) — Source candidate and release history
+
 - [Quickstart](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/quickstart.md) — Setup and first run
 - [Philosophy](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/philosophy.md) — Design rationale
-- [Standards](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/standards.md) — A2A, AP2, SSE, OpenAI-compatible model calls, and the current MCP boundary
+- [Standards](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/standards.md) — A2A, AP2, SSE, OpenAI-compatible model calls, and MCP runtime boundaries
 - [Architecture](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/architecture.md) — Component layers and request flow
 - [SDK Guide](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/sdk.md) — Building blocks and API reference
 - [Foundry Onboarding](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/foundry-onboarding.md) — Discovery, invite, and approval flow
+- [Private Foundry Login](docs/private-foundry-login.md) — Sign in to a private Foundry with a local account, without GitHub
+- [Customer Projects](docs/customer-projects.md) — Run your own Python source, build local containers, export images, and push to a private registry
+- [Intranet Dependency Setup](docs/intranet-dependencies.md) — Private pip/npm mirrors, CA configuration and offline bootstrap
+- [AgentService Packaging](docs/agentservice-packaging.md) — Package an agent as a Foundry Marketplace local package and install it on your own instance
 - [Protocol (Wire Format)](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/protocol.md) — HTTP contract and SSE events
 - [Cloud Run Deployment](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/cloud-run-deployment.md) — Deploy agents to Google Cloud Run with Cloud Scheduler
-- [Resource Cost Accounting Plan](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/resource-cost-accounting-plan.md) — Implementation plan for deducting Foundry-provided LLM and sandbox costs from paid task settlement
-- [Bounty Email Notifications](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/foundry-bounty-email-notifications.md) — Settlement success email pipeline
+- [Bounty Email Notifications](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/foundry-bounty-email-notifications.md) — Bounty-success email preference and contents
 - [Security](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/security.md) — Local threat model, CORS, URL handling, and secret hygiene
 - [Non-Goals](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/non-goals.md) — What this repo intentionally excludes
 - [Agent Dev Board](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/agent-dev-board.md) — Local dev UI guide
-- [Gitea Changelog](https://github.com/ic-star-tech/ccfoundry-agent-kit/blob/main/docs/gitea-changelog.md) — Features in Gitea not yet in the public GitHub mirror
 
 ## Contributing And Security
 

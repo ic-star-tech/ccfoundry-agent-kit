@@ -1,11 +1,55 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ChatResponse",
-  "type": "object",
-  "required": ["reply", "notes_update", "metadata"],
+  "additionalProperties": true,
   "properties": {
-    "reply": { "type": "string" },
-    "notes_update": { "type": "string" },
-    "metadata": { "type": "object" }
-  }
+    "reply": {
+      "title": "Reply",
+      "type": "string"
+    },
+    "model": {
+      "default": "",
+      "title": "Model",
+      "type": "string"
+    },
+    "usage": {
+      "additionalProperties": true,
+      "title": "Usage",
+      "type": "object"
+    },
+    "notes_update": {
+      "default": "",
+      "title": "Notes Update",
+      "type": "string"
+    },
+    "status": {
+      "default": "ok",
+      "title": "Status",
+      "type": "string"
+    },
+    "command": {
+      "default": "",
+      "title": "Command",
+      "type": "string"
+    },
+    "service_fee": {
+      "default": 0.0,
+      "title": "Service Fee",
+      "type": "number"
+    },
+    "service_fee_detail": {
+      "default": "",
+      "title": "Service Fee Detail",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "reply"
+  ],
+  "title": "ChatResponse",
+  "type": "object"
 }

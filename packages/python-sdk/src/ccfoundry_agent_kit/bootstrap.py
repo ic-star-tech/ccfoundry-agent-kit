@@ -6,13 +6,17 @@ import logging
 import os
 import secrets
 import sys
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, Field
 
+from ._version import __version__
+from .errors import error_summary, raise_for_foundry_status
 from .models import AgentManifest
 
 logger = logging.getLogger(__name__)
@@ -165,6 +169,8 @@ class FoundryBootstrap:
         self._lock = asyncio.Lock()
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._mcp_services: list[str] = []
+        self._resource_sync_lock = asyncio.Lock()
         self.config.bootstrap_delivery = _normalize_bootstrap_delivery(self.config.bootstrap_delivery)
         self.state_path = Path(config.state_path).expanduser() if config.state_path else self.agent_space_dir / "agent_space" / ".foundry_bootstrap.json"
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -337,6 +343,7 @@ class FoundryBootstrap:
         profile_metadata.setdefault("agent_name", self.manifest.name)
         profile_metadata.setdefault("agent_label", self.manifest.label)
         profile_metadata.setdefault("sdk", "ccfoundry-agent-kit")
+        profile_metadata.setdefault("sdk_version", __version__)
         source_id = str(self.state.source_id or self.config.source_id or "").strip()
         if source_id:
             profile_metadata.setdefault("agent_source_id", source_id)
@@ -380,6 +387,7 @@ class FoundryBootstrap:
             "network_zone": self.config.network_zone,
             "system_manifest": {
                 "sdk": "ccfoundry-agent-kit",
+                "sdk_version": __version__,
                 "python_version": sys.version.split()[0],
                 **system_manifest,
             },
@@ -615,7 +623,7 @@ class FoundryBootstrap:
                 )
             if response.status_code == 404:
                 return
-            response.raise_for_status()
+            raise_for_foundry_status(response)
             payload = response.json()
             self.state.last_polled_at = _utcnow_iso()
             self.state.last_error = None
@@ -624,7 +632,7 @@ class FoundryBootstrap:
                 await self._apply_bootstrap_actions(payload)
         except Exception as exc:
             logger.warning("Bootstrap action polling failed", exc_info=exc)
-            self.state.last_error = "bootstrap_poll_failed"
+            self.state.last_error = error_summary("bootstrap_poll_failed", exc)
             self._save_state()
 
     async def _announce_or_heartbeat(self) -> None:
@@ -649,7 +657,7 @@ class FoundryBootstrap:
                     self.state.discovery_status = None
                     self._save_state()
                     return await self._announce_or_heartbeat()
-                response.raise_for_status()
+                raise_for_foundry_status(response)
                 payload = response.json()
                 self.state.discovery_status = str(payload.get("status") or "DISCOVERED")
                 self.state.last_discovery_at = _utcnow_iso()
@@ -669,7 +677,7 @@ class FoundryBootstrap:
                         "x_foundry": self.build_foundry_envelope(),
                     },
                 )
-            response.raise_for_status()
+            raise_for_foundry_status(response)
             payload = response.json()
             self.state.discovery_id = str(payload.get("discovery_id") or "").strip() or None
             self.state.discovery_status = str(payload.get("status") or "DISCOVERED")
@@ -682,7 +690,7 @@ class FoundryBootstrap:
                 await self._poll_bootstrap_actions()
         except Exception as exc:
             logger.warning("Bootstrap announce/heartbeat failed", exc_info=exc)
-            self.state.last_error = "bootstrap_discovery_failed"
+            self.state.last_error = error_summary("bootstrap_discovery_failed", exc)
             self._save_state()
 
     def public_state(self) -> dict[str, Any]:
@@ -795,7 +803,7 @@ class FoundryBootstrap:
                 f"{foundry_base_url}/api/agents/{agent_name}/config",
                 headers={"Authorization": f"Bearer {agent_secret}"},
             )
-        response.raise_for_status()
+        raise_for_foundry_status(response)
         payload = response.json()
         return payload if isinstance(payload, dict) else {}
 
@@ -826,7 +834,7 @@ class FoundryBootstrap:
                     f"{self.config.foundry_base_url.rstrip('/')}/api/registry/register",
                     json=self.build_registration_payload(invite),
                 )
-            response.raise_for_status()
+            raise_for_foundry_status(response)
             payload = response.json()
             async with self._lock:
                 self.state.registration_agent_id = str(payload.get("agent_id") or "").strip() or None
@@ -865,7 +873,7 @@ class FoundryBootstrap:
                 except Exception as exc:
                     logger.warning("Fetching approved agent env config failed", exc_info=exc)
                     async with self._lock:
-                        self.state.last_error = "bootstrap_fetch_config_failed"
+                        self.state.last_error = error_summary("bootstrap_fetch_config_failed", exc)
                         self._save_state()
             return {
                 "ok": True,
@@ -876,7 +884,7 @@ class FoundryBootstrap:
         except Exception as exc:
             logger.warning("Registering bootstrap invite failed", exc_info=exc)
             async with self._lock:
-                self.state.last_error = "bootstrap_register_failed"
+                self.state.last_error = error_summary("bootstrap_register_failed", exc)
                 self._save_state()
             raise
 
@@ -929,16 +937,107 @@ class FoundryBootstrap:
                 headers={"Authorization": f"Bearer {agent_secret}"},
                 json={"files": files},
             )
-        response.raise_for_status()
+        raise_for_foundry_status(response)
         payload = response.json()
         if not isinstance(payload, dict):
             return {"value": payload}
 
-        allocated_resources = dict(payload.get("allocated_resources") or {})
-        if allocated_resources:
-            self.state.allocated_resources = _deep_merge_dicts(self.state.allocated_resources, allocated_resources)
-            self._save_state()
+        await self._apply_resource_snapshot(payload)
         return payload
+
+    async def _apply_resource_snapshot(self, payload: dict[str, Any]) -> None:
+        # Go registry/sync returns a complete snapshot, not a nested patch.
+        if "allocated_resources" not in payload:
+            return
+        resources = payload["allocated_resources"]
+        if not isinstance(resources, dict):
+            raise ValueError("Invalid allocated resources snapshot")
+        async with self._lock:
+            self.state.allocated_resources = deepcopy(resources)
+            if payload.get("retired") is True:
+                self.state.registration_status = "RETIRED"
+                self.state.allocated_resources = {}
+                self._mcp_services = []
+            self._save_state()
+
+    async def mcp_servers(self) -> dict[str, Any]:
+        """Refresh complete managed grants; never acquire them by uploading YAML.
+
+        The existing metadata sync carries the last observed catalog names as
+        an acknowledgement. It does not grant resources or execute a tool.
+        A failed refresh never permits using a previously cached assignment.
+        """
+        from .mcp_runtime import FoundryMCPError
+
+        if (
+            not self.config.enabled
+            or not self.manifest.manifest.mcp.accepts_foundry_mcp
+        ):
+            return {}
+        if self.state.registration_status != "APPROVED":
+            return {}
+        name = str(self.state.registered_agent_name or "").strip()
+        secret = str(self.state.env_vars.get("AGENT_SECRET") or "").strip()
+        base = self.config.foundry_base_url.rstrip("/")
+        if not name or not secret or not base:
+            raise FoundryMCPError("auth", "refresh")
+        async with self._resource_sync_lock:
+            try:
+                async with httpx.AsyncClient(
+                    timeout=15.0, trust_env=False, follow_redirects=False
+                ) as client:
+                    response = await client.post(
+                        f"{base}/api/agents/{quote(name, safe='')}/registry/sync",
+                        headers={"Authorization": f"Bearer {secret}"},
+                        json={
+                            "capabilities": {"mcp_services": list(self._mcp_services)}
+                        },
+                    )
+                if not 200 <= response.status_code < 300:
+                    raise FoundryMCPError(
+                        "auth" if response.status_code in (401, 403) else "http",
+                        "refresh",
+                        http_status=response.status_code,
+                    )
+                payload = response.json()
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("ok") is not True
+                    or not isinstance(payload.get("allocated_resources"), dict)
+                ):
+                    raise FoundryMCPError("protocol", "refresh")
+                await self._apply_resource_snapshot(payload)
+                servers = self.state.allocated_resources.get("mcp_servers", {})
+                if not isinstance(servers, dict):
+                    raise FoundryMCPError("protocol", "refresh")
+                return deepcopy(servers)
+            except Exception as exc:
+                self._mcp_services = []
+                async with self._lock:
+                    self.state.allocated_resources.pop("mcp_servers", None)
+                    self._save_state()
+                if isinstance(exc, FoundryMCPError):
+                    raise
+                if isinstance(exc, httpx.TimeoutException):
+                    layer = "timeout"
+                elif isinstance(exc, httpx.TransportError):
+                    layer = "network"
+                else:
+                    layer = "protocol"
+                raise FoundryMCPError(layer, "refresh") from None
+
+    async def acknowledge_mcp_catalog(self, names: list[str]) -> None:
+        from .mcp_runtime import FoundryMCPError
+
+        if len(names) > 16 or any(
+            not isinstance(n, str) or not n or len(n) > 128 for n in names
+        ):
+            raise FoundryMCPError("config", "acknowledge")
+        self._mcp_services = sorted(set(names))
+        current = await self.mcp_servers()
+        if set(names) != set(current):
+            self._mcp_services = []
+            raise FoundryMCPError("auth", "acknowledge")
 
     async def sync_core_files(
         self,

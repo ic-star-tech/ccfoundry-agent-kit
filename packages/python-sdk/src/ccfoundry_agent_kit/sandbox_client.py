@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 
+from .errors import raise_for_foundry_status
+
 
 class FoundrySandboxClientError(RuntimeError):
     pass
@@ -80,21 +82,21 @@ class FoundrySandboxClient:
     async def _get(self, key: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(self._resolve_url(key), headers=self._headers(), params=params)
-        response.raise_for_status()
+        raise_for_foundry_status(response)
         payload = response.json()
         return payload if isinstance(payload, dict) else {"value": payload}
 
     async def _post(self, key: str, *, json: dict[str, Any] | None = None) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(self._resolve_url(key), headers=self._headers(), json=json)
-        response.raise_for_status()
+        raise_for_foundry_status(response)
         payload = response.json()
         return payload if isinstance(payload, dict) else {"value": payload}
 
     async def _put(self, key: str, *, json: dict[str, Any] | None = None) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.put(self._resolve_url(key), headers=self._headers(), json=json)
-        response.raise_for_status()
+        raise_for_foundry_status(response)
         payload = response.json()
         return payload if isinstance(payload, dict) else {"value": payload}
 

@@ -101,7 +101,7 @@ The trust boundary starts with the **manifest system** — the agent explicitly 
 | `dashboard.soul_visible` | Whether its SOUL.md is visible in Foundry dashboards |
 | `dashboard.soul_editable` | Whether host-side dashboards may edit its soul |
 | `infra.heartbeat_managed` | Whether it accepts Foundry health monitoring |
-| `mcp.accepts_foundry_mcp` | Whether it is willing to accept Foundry-provided MCP configuration metadata |
+| `mcp.accepts_foundry_mcp` | Whether it consumes Foundry-approved MCP tool assignments |
 
 A fully open official agent and a privacy-conscious third-party agent can both use the same SDK and the same onboarding flow. The difference is only in what they declare.
 
@@ -112,11 +112,11 @@ For Foundry-connected agents, the execution contract is then completed through t
 This project deliberately aligns with emerging open standards rather than inventing proprietary protocols:
 
 - **A2A** (Google Agent-to-Agent Protocol) for agent discovery — so your agent can be found and engaged by any A2A-compatible system
-- **MCP** (Model Context Protocol) as the vocabulary for manifest/config-level tool declarations, without a built-in MCP runtime yet
+- **MCP** (Model Context Protocol) for approved or explicitly agent-owned tools, with built-in bounded client sessions
 - **OpenAI Chat Completions** for model calls — so any compatible provider works without code changes
 - **SSE** (Server-Sent Events) for streaming — because it is simple, well-supported, and sufficient
 
-The reasoning is pragmatic, not ideological. Proprietary protocols create artificial barriers. Open standards make your agent more useful in a wider ecosystem. When the agent speaks A2A, any platform that understands A2A can discover it. The repo already ships A2A discovery and SSE streaming today, and it keeps MCP-related declarations aligned with the standard rather than inventing a proprietary schema.
+The reasoning is pragmatic, not ideological. Proprietary protocols create artificial barriers. Open standards make your agent more useful in a wider ecosystem. When the agent speaks A2A, any platform that understands A2A can discover it. The repo already ships A2A discovery and SSE streaming today, and its MCP runtime uses the official client SDK.
 
 See [Standards](standards.md) for the full rationale.
 

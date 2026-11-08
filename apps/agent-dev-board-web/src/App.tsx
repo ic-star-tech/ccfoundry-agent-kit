@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ProjectContainerPanel } from "./ProjectContainerPanel";
 
 type ContextMode = "direct" | "inline";
 type BoardView = "guide" | "agent" | "playground" | "earnings" | "skills" | "jobs";
@@ -142,6 +143,13 @@ type FoundryBootstrapSession = {
   expires_in_minutes: number;
 };
 
+type LocalFoundrySession = {
+  session_id: string;
+  foundry_url: string;
+  developer_identity: Record<string, unknown>;
+  expires_at: string;
+};
+
 type GithubDeviceSession = {
   session_id: string;
   foundry_url: string;
@@ -163,12 +171,20 @@ type GithubDevicePollResult = {
 };
 
 type LocalAgentTemplate = {
+  kind?: string;
+  project_path?: string;
+  app_module?: string;
   id: string;
   label: string;
   description: string;
 };
 
 type LocalAgentRuntime = {
+  source_kind?: string;
+  project_path?: string;
+  app_module?: string;
+  runtime_kind?: string;
+  project_build_id?: string;
   name: string;
   label: string;
   template_id: string;
@@ -1609,6 +1625,12 @@ export default function App() {
   const [notificationError, setNotificationError] = useState("");
   const [notificationStatus, setNotificationStatus] = useState("");
   const [oauthLoading, setOauthLoading] = useState(false);
+  const [developerAuthMethod, setDeveloperAuthMethod] = useState<"foundry" | "github">("foundry");
+  const [localFoundrySession, setLocalFoundrySession] = useState<LocalFoundrySession | null>(null);
+  const [foundryUsername, setFoundryUsername] = useState("");
+  const [foundryPassword, setFoundryPassword] = useState("");
+  const [localLoginLoading, setLocalLoginLoading] = useState(false);
+  const loginGeneration = useRef(0);
   const [foundryBootstrapSession, setFoundryBootstrapSession] = useState<FoundryBootstrapSession | null>(null);
   const [githubDeviceSession, setGithubDeviceSession] = useState<GithubDeviceSession | null>(null);
   const [githubDeviceIdentity, setGithubDeviceIdentity] = useState<Record<string, unknown> | null>(null);
@@ -1754,11 +1776,12 @@ export default function App() {
   const displaySensitiveUrl = (value: unknown, fallback = "n/a") => sensitiveUrlDisplay(value, fallback, showSensitiveInfo);
   const displaySensitiveBlock = (value: unknown, fallback = "") => sensitiveBlockDisplay(value, fallback, showSensitiveInfo);
   const displayedDeveloperLogin = textValue(
-    foundryBootstrapSession?.github_login,
-    textValue(githubDeviceIdentity?.login, textValue(developerGithub.login, "not detected")),
+    localFoundrySession?.developer_identity.username,
+    textValue(foundryBootstrapSession?.github_login,
+      textValue(githubDeviceIdentity?.login, textValue(developerGithub.login, "not detected"))),
   );
   const developerSessionReady = Boolean(
-    developerForm.developer_token.trim() || developerForm.github_token.trim() || foundryBootstrapSession,
+    localFoundrySession || developerForm.developer_token.trim() || developerForm.github_token.trim() || foundryBootstrapSession,
   );
   const developerAuthReady = developerSessionReady || boolValue(developerGithub.has_token);
   const foundryBrowserSessionReady = Boolean(foundryBootstrapSession);
@@ -1801,6 +1824,9 @@ export default function App() {
   const cloudRunDeploymentStatus = textValue(displayedCloudRunDeployment?.status);
   const cloudRunDeploymentActive = ["queued", "running"].includes(cloudRunDeploymentStatus);
   const cloudRunDeploymentStarted = Boolean(displayedCloudRunDeployment && !displayedCloudRunDeployment.dry_run);
+  useEffect(() => {
+    if (selectedLocalAgent?.source_kind === "project") setGuideRunTarget("local");
+  }, [selectedLocalAgent?.source_kind]);
   const cloudRunRuntimePresent = cloudRunDeploymentStarted || cloudRunDeploymentSucceeded || Boolean(selectedCloudRunLiveService);
   const cloudRunClaimInstalledButRuntimeMissing = guideRunTarget === "cloud_run" && claimInstalled && !cloudRunRuntimePresent;
   const cloudRunClaimReady = claimInstalled || cloudRunDeploymentStarted;
@@ -1808,10 +1834,12 @@ export default function App() {
   const cloudRunCanInstallSourceClaim = cloudRunNeedsSourceClaim && developerSessionReady;
   const cloudRunDeployBlockReason = !selectedLocalAgent
     ? "Create or select an agent source first."
+    : selectedLocalAgent.source_kind === "project"
+      ? "Customer projects use the local container and private registry workflow."
     : !cloudRunAuthenticated
       ? "Google Cloud login is required before Cloud Run deployment."
       : cloudRunNeedsSourceClaim && !developerSessionReady
-        ? "GitHub login is required so Dev Board can install the Foundry source claim before deployment."
+        ? "Developer login is required so Dev Board can install the Foundry source claim before deployment."
         : "";
   const cloudRunDeployButtonLabel = cloudRunDeploying
     ? "Starting..."
@@ -1828,6 +1856,36 @@ export default function App() {
     textValue(displayedCloudRunDeployment?.started_at, textValue(displayedCloudRunDeployment?.created_at)),
     textValue(displayedCloudRunDeployment?.finished_at),
   );
+
+  useEffect(() => {
+    loginGeneration.current += 1;
+    setLocalFoundrySession(null);
+    setFoundryPassword("");
+    setLocalLoginLoading(false);
+    setFoundryBootstrapSession(null);
+    setGithubDeviceSession(null);
+    setGithubDeviceIdentity(null);
+    setOauthLoading(false);
+    setDeveloperContext(null);
+    setDeveloperTicket(null);
+    setDeveloperForm((previous) => ({ ...previous, developer_token: "", github_token: "" }));
+  }, [foundryUrl, developerAuthMethod]);
+
+  useEffect(() => {
+    if (!localFoundrySession) return;
+    const sessionId = localFoundrySession.session_id;
+    const timer = window.setTimeout(() => {
+      setLocalFoundrySession(null);
+      setDeveloperError("Foundry developer session expired. Sign in again.");
+    }, Math.max(0, Date.parse(localFoundrySession.expires_at) - Date.now()));
+    return () => {
+      window.clearTimeout(timer);
+      void fetch(`${API_BASE}/api/developer/foundry-logout`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }), keepalive: true,
+      }).catch(() => undefined);
+    };
+  }, [localFoundrySession]);
 
   useEffect(() => {
     if (foundryUrl.trim()) {
@@ -1882,7 +1940,7 @@ export default function App() {
     })();
 
     const handleMessage = (event: MessageEvent) => {
-      if (!expectedOrigin || event.origin !== expectedOrigin) {
+      if (developerAuthMethod !== "github" || !expectedOrigin || event.origin !== expectedOrigin) {
         return;
       }
       const payload = (event.data || {}) as Partial<FoundryBootstrapAuthMessage>;
@@ -1915,7 +1973,7 @@ export default function App() {
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [normalizedFoundryUrl]);
+  }, [normalizedFoundryUrl, developerAuthMethod]);
 
   useEffect(() => {
     if (!githubDeviceSession || !oauthLoading) {
@@ -2417,7 +2475,7 @@ export default function App() {
     const confirmed = window.confirm(
       developerSessionReady
         ? `Retire ${label}? Foundry will soft-retire the agent and Dev Board will remove it from the active runtime list.`
-        : `Retire ${label}? Dev Board will remove it from the active runtime list. Foundry remote retire may require GitHub login later.`,
+        : `Retire ${label}? Dev Board will remove it from the active runtime list. Foundry remote retire may require developer login later.`,
     );
     if (!confirmed) {
       return;
@@ -2434,6 +2492,8 @@ export default function App() {
           foundry_url: normalizedFoundryUrl || foundryUrl,
           developer_token: developerForm.developer_token,
           github_token: developerForm.github_token,
+          foundry_session_id: localFoundrySession?.session_id || "",
+          auth_method: developerAuthMethod,
           reason: "dev_board_retire",
           stop_local: true,
         }),
@@ -2698,7 +2758,7 @@ export default function App() {
   async function deployCloudRunAfterSourceClaim(dryRun: boolean) {
     if (!dryRun && !cloudRunClaimReady) {
       if (!developerSessionReady) {
-        setTicketError("GitHub login is required before installing the Foundry source claim.");
+        setTicketError("Developer login is required before installing the Foundry source claim.");
         return;
       }
       const claimReady = await requestBootstrapTicket();
@@ -2774,6 +2834,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           foundry_url: currentFoundryUrl,
+          auth_method: developerAuthMethod,
         }),
       });
       if (!response.ok) {
@@ -2841,6 +2902,8 @@ export default function App() {
           foundry_url: foundryUrl,
           developer_token: developerForm.developer_token,
           github_token: developerForm.github_token,
+          foundry_session_id: localFoundrySession?.session_id || "",
+          auth_method: developerAuthMethod,
           email: notificationEmail,
           bounty_success_email_enabled: notificationEnabled,
         }),
@@ -2879,6 +2942,8 @@ export default function App() {
           foundry_url: foundryUrl,
           developer_token: developerForm.developer_token,
           github_token: developerForm.github_token,
+          foundry_session_id: localFoundrySession?.session_id || "",
+          auth_method: developerAuthMethod,
           bootstrap_delivery: developerForm.bootstrap_delivery,
           force_rediscover: developerForm.force_rediscover,
           runtime_target: guideRunTarget,
@@ -2888,6 +2953,7 @@ export default function App() {
         throw new Error(await response.text());
       }
       const payload = (await response.json()) as DeveloperTicketResult;
+      if (!payload.ok) throw new Error(payload.message || "Foundry did not issue a developer ticket.");
       setDeveloperTicket(payload);
       if (notificationEmail.trim() || !notificationEnabled) {
         void syncNotificationPreferences({ silent: true });
@@ -2911,11 +2977,42 @@ export default function App() {
     }
   }
 
+  async function loginWithFoundryAccount() {
+    const generation = ++loginGeneration.current;
+    const password = foundryPassword;
+    setFoundryPassword("");
+    setLocalLoginLoading(true);
+    setLocalFoundrySession(null);
+    setDeveloperError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/developer/foundry-login`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ foundry_url: normalizedFoundryUrl, username: foundryUsername, password }),
+      });
+      if (!response.ok) throw new Error(await readErrorMessage(response));
+      const session = (await response.json()) as LocalFoundrySession;
+      if (generation !== loginGeneration.current) {
+        void fetch(`${API_BASE}/api/developer/foundry-logout`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: session.session_id }),
+        }).catch(() => undefined);
+        return;
+      }
+      setLocalFoundrySession(session);
+      setTicketError("");
+    } catch (err) {
+      if (generation === loginGeneration.current) setDeveloperError(String(err));
+    } finally {
+      if (generation === loginGeneration.current) setLocalLoginLoading(false);
+    }
+  }
+
   async function loginWithFoundryGithub() {
     if (!normalizedFoundryUrl) {
       setDeveloperError("Foundry URL is required before GitHub login.");
       return;
     }
+    const generation = loginGeneration.current;
     setOauthLoading(true);
     setDeveloperError("");
     setGithubDeviceSession(null);
@@ -2931,6 +3028,7 @@ export default function App() {
         throw new Error(await readErrorMessage(response));
       }
       const payload = (await response.json()) as GithubDeviceSession;
+      if (generation !== loginGeneration.current) return;
       setGithubDeviceSession(payload);
       setGithubDeviceIdentity(null);
       if (payload.user_code && navigator.clipboard?.writeText) {
@@ -3118,7 +3216,7 @@ export default function App() {
                 <span className={`chip ${deploymentTargetReady ? "tone-success" : ""}`}>
                   2. {guideRunTarget === "cloud_run" ? "Cloud Run" : "Local"} target
                 </span>
-                <span className={`chip ${developerSessionReady ? "tone-success" : ""}`}>3. GitHub login</span>
+                <span className={`chip ${developerSessionReady ? "tone-success" : ""}`}>3. Developer login</span>
                 <span className={`chip ${claimInstalled ? "tone-success" : ""}`}>4. Foundry claim</span>
                 <span className={`chip ${onboardingComplete ? "tone-success" : onboardingRetired ? "tone-warn" : ""}`}>5. Onboarded</span>
                 <span className={`chip ${smokeObserved ? "tone-success" : ""}`}>6. Smoke test</span>
@@ -3133,7 +3231,7 @@ export default function App() {
                   <div>
                     <h4>Create agent source</h4>
                     <p className="muted">
-                      Start from the template, give it a stable name, and load any skills the agent should carry.
+                      Select a template or a registered customer project, then give the source a stable name.
                     </p>
                   </div>
                 </div>
@@ -3147,15 +3245,16 @@ export default function App() {
                     </p>
                   </div>
                 ) : null}
+                <p className="muted">Register your project when starting the board: <code>ccfoundry --project /path/to/project</code>.</p>
                 <label>
-                  Template
+                  Template or customer project
                   <select
                     value={createAgentForm.template_id}
                     onChange={(event) => updateCreateAgentForm("template_id", event.target.value)}
                   >
                     {localTemplates.map((template) => (
                       <option key={template.id} value={template.id}>
-                        {template.label}
+                        {template.kind === "project" ? `Customer: ${template.label}` : template.label}
                       </option>
                     ))}
                   </select>
@@ -3229,13 +3328,14 @@ export default function App() {
                   <button
                     type="button"
                     className={`run-target-button ${guideRunTarget === "cloud_run" ? "active" : ""}`}
+                    disabled={selectedLocalAgent?.source_kind === "project"}
                     onClick={() => {
                       setGuideRunTarget("cloud_run");
                       void refreshCloudRunStatus();
                       void refreshCloudRunDeployments();
                     }}
                   >
-                    <strong>Cloud Run pull worker</strong>
+                    <strong>Cloud Run pull worker (built-in templates)</strong>
                     <span>Build the selected source into a scheduled worker for Foundry tasks.</span>
                   </button>
                 </div>
@@ -3263,13 +3363,17 @@ export default function App() {
                         </button>
                       ) : (
                         <button onClick={() => selectedLocalAgent && startLocalAgent(selectedLocalAgent.name)} disabled={localAgentLoading || !selectedLocalAgent}>
-                          Start local runtime
+                          Start local Python runtime
                         </button>
                       )}
                       <button className="secondary" onClick={() => setActiveView("playground")} disabled={!playgroundReady}>
                         Open local playground
                       </button>
                     </div>
+                    {selectedLocalAgent?.source_kind === "project" && <ProjectContainerPanel
+                      key={selectedLocalAgent.name} source={selectedLocalAgent} apiBase={API_BASE}
+                      onChanged={() => refreshAgentInventory(selectedLocalAgent.name)}
+                    />}
                   </div>
                 ) : (
                   <div className="guide-cloud-run-panel">
@@ -3513,7 +3617,7 @@ export default function App() {
                   <div>
                     <h4>Log in as a developer</h4>
                     <p className="muted">
-                      Use the popup-based GitHub login so Dev Board gets a short-lived Foundry bootstrap token.
+                      Sign in with an account on your Foundry instance. GitHub is optional.
                     </p>
                   </div>
                 </div>
@@ -3522,31 +3626,41 @@ export default function App() {
                   value={foundryUrl}
                   onChange={setFoundryUrl}
                   maskValue={!showSensitiveInfo}
-                  helper=".com is the CN target, .ai is the WW target. You can still type any other compatible Foundry URL."
+                  helper="Enter your Foundry HTTPS address, including a private network address. Changing it clears the developer session."
                 />
+                <label>
+                  Developer login method
+                  <select value={developerAuthMethod} onChange={(event) => setDeveloperAuthMethod(event.target.value as "foundry" | "github")}>
+                    <option value="foundry">Foundry account (private network)</option>
+                    <option value="github">GitHub</option>
+                  </select>
+                </label>
                 {developerSessionReady ? (
                   <div className="reply">
                     <strong>{displaySensitive(displayedDeveloperLogin, "not detected")}</strong>
-                    <p>
-                      {developerForm.github_token.trim() && !developerForm.developer_token.trim() && !foundryBootstrapSession
-                        ? "GitHub device authorization is ready for Foundry bootstrap."
-                        : `Developer bootstrap session is ready. Token TTL: ${foundryBootstrapSession?.expires_in_minutes || 30} min.`}
-                    </p>
+                    <p>{localFoundrySession
+                      ? `Foundry developer session expires at ${new Date(localFoundrySession.expires_at).toLocaleTimeString()}.`
+                      : "Developer authorization is ready for Foundry bootstrap."}</p>
+                    {localFoundrySession ? <button className="secondary" onClick={() => setLocalFoundrySession(null)}>Sign out of Dev Board</button> : null}
                   </div>
+                ) : null}
+                {developerAuthMethod === "foundry" ? (
+                  <form onSubmit={(event) => { event.preventDefault(); void loginWithFoundryAccount(); }}>
+                    <label>Foundry username<input autoComplete="username" value={foundryUsername} onChange={(event) => setFoundryUsername(event.target.value)} /></label>
+                    <label>Foundry password<input type="password" autoComplete="current-password" value={foundryPassword} onChange={(event) => setFoundryPassword(event.target.value)} /></label>
+                    <p className="muted">Use an active account created on the selected Foundry. This session lasts up to 15 minutes and must be renewed after a page reload.</p>
+                    <button type="submit" disabled={localLoginLoading || !normalizedFoundryUrl || !foundryUsername.trim() || !foundryPassword}>
+                      {localLoginLoading ? "Signing in..." : "Sign in to Foundry"}
+                    </button>
+                  </form>
                 ) : (
-                  <p className="muted">
-                    Local GitHub CLI detection is optional. The device login is the recommended path for public Dev Board
-                    deployments because it does not require a callback URL.
-                  </p>
+                  <div className="actions split-actions">
+                    <button className="secondary" onClick={loginWithFoundryGithub} disabled={oauthLoading || !normalizedFoundryUrl}>
+                      {oauthLoading ? "Waiting for GitHub..." : "Login with GitHub"}
+                    </button>
+                    <button className="secondary" onClick={loginWithFoundryGithubPopup} disabled={oauthLoading || !normalizedFoundryUrl}>Popup fallback</button>
+                  </div>
                 )}
-                <div className="actions split-actions">
-                  <button className="secondary" onClick={loginWithFoundryGithub} disabled={oauthLoading || !normalizedFoundryUrl}>
-                    {oauthLoading ? "Waiting for GitHub..." : "Login with GitHub"}
-                  </button>
-                  <button className="secondary" onClick={loginWithFoundryGithubPopup} disabled={oauthLoading || !normalizedFoundryUrl}>
-                    Popup fallback
-                  </button>
-                </div>
                 {githubDeviceSession ? (
                   <div className="device-login-box">
                     <div>
@@ -3865,7 +3979,7 @@ export default function App() {
                   <div>
                     <h4>Test the agent in Foundry</h4>
                     <p className="muted">
-                      Use the same Foundry target as the GitHub login, or switch it here before you open{" "}
+                      Use the same Foundry target as the developer login, or switch it here before you open{" "}
                       <code>{displaySensitiveUrl(foundryPortalUrl)}</code>{" "}
                       to validate the same agent inside the live Foundry product after bootstrap is approved.
                     </p>
@@ -3896,11 +4010,11 @@ export default function App() {
                   </div>
                 </div>
                 <div className="reply">
-                  <strong>{foundryBrowserSessionReady ? "You can likely go straight in" : "GitHub login is required"}</strong>
+                  <strong>{foundryBrowserSessionReady ? "You can likely go straight in" : "Sign in to Foundry"}</strong>
                   <p>
                     {foundryBrowserSessionReady
                       ? "If you completed the GitHub popup login in step 3 in this browser, Foundry will usually open with that session already available. If it still asks you to sign in, continue with GitHub there."
-                      : "Foundry uses GitHub login for this flow. If you have not signed in through the popup earlier on this page, Foundry will ask you to continue with GitHub before you can test the agent."}
+                      : "Sign in to the selected Foundry with your local account or its configured login provider. The Dev Board developer session does not sign you in to the Foundry browser app."}
                   </p>
                 </div>
                 <div className="actions split-actions">
@@ -3993,7 +4107,7 @@ export default function App() {
                       <strong>{displaySensitive(handshakeResult?.foundry.url, displaySensitive(bootstrapState.foundry_base_url, "n/a"))}</strong>
                     </div>
                     <div>
-                      <span>GitHub login</span>
+                      <span>Developer login</span>
                       <strong>{displaySensitive(displayedDeveloperLogin, "not detected")}</strong>
                     </div>
                     <div>
@@ -4037,7 +4151,7 @@ export default function App() {
                   </div>
                   {!developerSessionReady ? (
                     <div className="guide-blocker">
-                      <strong>GitHub login required</strong>
+                      <strong>Developer login required</strong>
                       <p>Use Guided setup step 3 before retiring a Foundry-linked agent.</p>
                     </div>
                   ) : null}
@@ -4073,14 +4187,14 @@ export default function App() {
                     a local debug runtime or deploy that source to Cloud Run.
                   </p>
                   <label>
-                    Template
+                    Template or customer project
                     <select
                       value={createAgentForm.template_id}
                       onChange={(event) => updateCreateAgentForm("template_id", event.target.value)}
                     >
                       {localTemplates.map((template) => (
                         <option key={template.id} value={template.id}>
-                          {template.label}
+                          {template.kind === "project" ? `Customer: ${template.label}` : template.label}
                         </option>
                       ))}
                     </select>
@@ -4114,7 +4228,7 @@ export default function App() {
                     value={foundryUrl}
                     onChange={setFoundryUrl}
                     maskValue={!showSensitiveInfo}
-                    helper=".com is the CN target, .ai is the WW target. You can still type any other compatible Foundry URL."
+                    helper="Enter your Foundry HTTPS address, including a private network address. Changing it clears the developer session."
                   />
                   <div className="actions split-actions">
                     <button onClick={createLocalAgent} disabled={localAgentLoading}>
@@ -4690,7 +4804,7 @@ export default function App() {
                       <strong>{displaySensitive(handshakeResult?.foundry.url, displaySensitive(bootstrapState.foundry_base_url, "n/a"))}</strong>
                     </div>
                     <div>
-                      <span>GitHub login</span>
+                      <span>Developer login</span>
                       <strong>{displaySensitive(displayedDeveloperLogin, "not detected")}</strong>
                     </div>
                   </div>

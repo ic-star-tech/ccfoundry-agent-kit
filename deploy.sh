@@ -23,7 +23,7 @@ BOOT_DISK_SIZE="${CCFOUNDRY_BOOT_DISK_SIZE:-$BOOT_DISK_SIZE_DEFAULT}"
 NETWORK="${CCFOUNDRY_NETWORK:-$NETWORK_DEFAULT}"
 NETWORK_TAG="${CCFOUNDRY_NETWORK_TAG:-$NETWORK_TAG_DEFAULT}"
 FIREWALL_RULE="${CCFOUNDRY_FIREWALL_RULE:-$FIREWALL_RULE_DEFAULT}"
-SOURCE_RANGES="${CCFOUNDRY_SOURCE_RANGES:-0.0.0.0/0}"
+SOURCE_RANGES="${CCFOUNDRY_SOURCE_RANGES:-}"
 SERVICE_ACCOUNT_ID="${CCFOUNDRY_SERVICE_ACCOUNT_ID:-$SERVICE_ACCOUNT_ID_DEFAULT}"
 SETUP_SERVICE_ACCOUNT="${CCFOUNDRY_SETUP_SERVICE_ACCOUNT:-true}"
 DRY_RUN=false
@@ -49,7 +49,9 @@ Options:
 
 Environment variables with the CCFOUNDRY_ prefix can also override defaults,
 for example CCFOUNDRY_ZONE=asia-east2-a or CCFOUNDRY_INSTANCE_NAME=my-board.
-Use CCFOUNDRY_SOURCE_RANGES=<cidr> to restrict public Dev Board access.
+Dev Board has no login, so its ports are opened only to your public IP by default.
+Use CCFOUNDRY_SOURCE_RANGES=<cidr>[,<cidr>] to choose who can reach it; in Cloud Shell
+the script asks for the IP of the browser you will use. 0.0.0.0/0 opens it to everyone.
 Use CCFOUNDRY_CREATE_PROJECT=<id> to create a new project before deployment.
 EOF
 }
@@ -121,6 +123,107 @@ run() {
     else
         "$@"
     fi
+}
+
+valid_ipv4() {
+    local ip="$1"
+    local octet
+    [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+    local IFS=.
+    for octet in $ip; do
+        ((10#$octet <= 255)) || return 1
+    done
+}
+
+valid_source_ranges() {
+    local ranges="$1"
+    local item address prefix
+    [[ -n "$ranges" ]] || return 1
+    local IFS=,
+    for item in $ranges; do
+        [[ "$item" =~ ^([0-9.]+)/([0-9]{1,2})$ ]] || return 1
+        address="${BASH_REMATCH[1]}"
+        prefix="${BASH_REMATCH[2]}"
+        valid_ipv4 "$address" || return 1
+        ((10#$prefix <= 32)) || return 1
+    done
+}
+
+warn_open_to_internet() {
+    warn "=============================================================================="
+    warn "CCFOUNDRY_SOURCE_RANGES includes 0.0.0.0/0: Dev Board ports 3000 and 8090 will be"
+    warn "reachable from the whole internet. The Dev Board API has no login and can start"
+    warn "local processes and deploy with this VM's Google Cloud credentials."
+    warn "=============================================================================="
+}
+
+detect_public_ip() {
+    local endpoint ip
+    command -v curl >/dev/null 2>&1 || return 1
+    for endpoint in ${CCFOUNDRY_PUBLIC_IP_ENDPOINTS:-https://checkip.amazonaws.com https://api.ipify.org}; do
+        ip="$(curl -fsS --max-time 5 "$endpoint" 2>/dev/null | tr -d '[:space:]')" || continue
+        if valid_ipv4 "$ip"; then
+            printf '%s\n' "$ip"
+            return 0
+        fi
+    done
+    return 1
+}
+
+resolve_source_ranges() {
+    local answer ip
+
+    if [[ -n "$SOURCE_RANGES" ]]; then
+        SOURCE_RANGES="${SOURCE_RANGES// /}"
+        valid_source_ranges "$SOURCE_RANGES" ||
+            fail "CCFOUNDRY_SOURCE_RANGES must be comma-separated IPv4 CIDRs, for example 203.0.113.7/32."
+        if [[ ",$SOURCE_RANGES," == *",0.0.0.0/0,"* ]]; then
+            warn_open_to_internet
+        fi
+        return 0
+    fi
+
+    if [[ "${CLOUD_SHELL:-}" == "true" ]]; then
+        # Cloud Shell egresses from a Google address, not from the browser that opens Dev Board.
+        if [[ -t 0 && -t 1 ]]; then
+            echo ""
+            echo "Dev Board has no login, so its ports are opened only to the address you choose."
+            echo "Open https://checkip.amazonaws.com in the browser you will use for Dev Board and paste the address shown."
+            while [[ -z "$SOURCE_RANGES" ]]; do
+                read -r -p "Allowed IP or CIDR (type 'any' to allow the whole internet): " answer
+                answer="${answer// /}"
+                if [[ "$answer" == "any" ]]; then
+                    SOURCE_RANGES="0.0.0.0/0"
+                    warn_open_to_internet
+                elif valid_ipv4 "$answer"; then
+                    SOURCE_RANGES="${answer}/32"
+                elif valid_source_ranges "$answer"; then
+                    SOURCE_RANGES="$answer"
+                else
+                    warn "Enter an IPv4 address such as 203.0.113.7, a CIDR such as 203.0.113.0/24, or 'any'."
+                fi
+            done
+            return 0
+        fi
+        if $DRY_RUN; then
+            SOURCE_RANGES="<your-browser-ip>/32"
+            warn "Dry run: a real run in Cloud Shell asks for your browser's public IP or needs CCFOUNDRY_SOURCE_RANGES."
+            return 0
+        fi
+        fail "Cloud Shell cannot detect the IP of your browser. Run: CCFOUNDRY_SOURCE_RANGES=<your-ip>/32 ./deploy.sh (see https://checkip.amazonaws.com)."
+    fi
+
+    if ip="$(detect_public_ip)"; then
+        SOURCE_RANGES="${ip}/32"
+        log "Dev Board ports will be open only to your public IP ${ip} (set CCFOUNDRY_SOURCE_RANGES to change)."
+        return 0
+    fi
+    if $DRY_RUN; then
+        SOURCE_RANGES="<your-public-ip>/32"
+        warn "Dry run: could not detect your public IP; a real run needs CCFOUNDRY_SOURCE_RANGES."
+        return 0
+    fi
+    fail "Could not detect your public IP. Set CCFOUNDRY_SOURCE_RANGES=<your-ip>/32 (0.0.0.0/0 allows everyone and is not recommended)."
 }
 
 gcloud_value() {
@@ -604,6 +707,9 @@ main() {
     log "Machine type: $MACHINE_TYPE"
     log "Image:        $IMAGE_PROJECT/$IMAGE_FAMILY"
 
+    resolve_source_ranges
+    log "Allowed from: $SOURCE_RANGES"
+
     enable_required_apis
     ensure_firewall_rule
 
@@ -640,6 +746,7 @@ main() {
     echo "Instance:   $INSTANCE_NAME"
     echo "Zone:       $ZONE"
     echo "Project:    $PROJECT_ID"
+    echo "Reachable from: $SOURCE_RANGES (re-run with CCFOUNDRY_SOURCE_RANGES to change)"
     echo ""
     echo "The VM was created with the cloud-platform OAuth scope. If Cloud Run deploys"
     echo "inside Dev Board still fail, check that the VM service account has Cloud Run,"
@@ -648,4 +755,7 @@ main() {
     echo "Web UI URL saved to .ccfoundry-dev-board-url"
 }
 
-main "$@"
+# Only run when executed; sourcing (tests) just loads the functions.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

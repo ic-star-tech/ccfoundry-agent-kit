@@ -1,0 +1,22 @@
+{
+  "agent_name": "nt-sync-sdk-mcp",
+  "agent_secret": "contract-fixture-only",
+  "refresh_request": {"capabilities": {"mcp_services": []}},
+  "ack_request": {"capabilities": {"mcp_services": ["local-process", "remote-http", "web-search"]}},
+  "resources": {
+    "sandbox_workspace": {"workspace_prefix": "fixture"},
+    "mcp_servers": {
+      "remote-http": {
+        "type": "streamable-http",
+        "url": "https://fixture.invalid/mcp",
+        "headers": {"Authorization": "Bearer synthetic-mcp-token"},
+        "tool_call_timeout_seconds": 45,
+        "zone": "GREEN"
+      },
+      "web-search": {"type": "sse", "url": "https://fixture.invalid/sse", "env": {}, "zone": "GREEN"},
+      "local-process": {"command": "fixture-mcp", "args": ["--stdio"], "env": {"EXPLICIT": "fixture"}, "zone": "GREEN"}
+    }
+  },
+  "resources_after_removal": {"sandbox_workspace": {"workspace_prefix": "fixture"}, "mcp_servers": {}},
+  "retired_response": {"ok": true, "allocated_resources": {}, "retired": true}
+}

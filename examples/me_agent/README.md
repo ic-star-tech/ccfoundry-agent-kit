@@ -122,3 +122,8 @@ The example chat handler also supports a few explicit sandbox commands so the Fo
 - `show sandbox workspace`
 - `read sandbox file test.md`
 - `write sandbox file test.md: hello`
+
+
+## MCP tools
+
+The SDK includes `FoundryMCPRuntime` and layered `FoundryMCPError`. The example consumes approved Foundry assignments and can explicitly enable agent-owned configuration; its model loop is bounded and preserves tool receipts. See [MCP runtime](../../docs/mcp-runtime.md) for setup, tests, limitations and deployment acceptance.

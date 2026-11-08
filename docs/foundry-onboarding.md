@@ -2,6 +2,8 @@
 
 This document explains how a self-hosted agent built with `ccfoundry-agent-kit` joins a modern CoChiper Foundry.
 
+To run the agent inside your own Foundry instance instead, as a Marketplace local package, see [AgentService Packaging](agentservice-packaging.md).
+
 The short version is:
 
 - the agent broadcasts who it is and what it wants
